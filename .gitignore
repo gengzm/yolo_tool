@@ -1,0 +1,47 @@
+# python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# venv 虚拟环境
+venv/
+env/
+.venv/
+
+# ide
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# mac
+.DS_Store
+.AppleDouble
+
+# 数据集、大文件
+*/训练集_*/
+*.zip
+*.tar
+*.gz
+*.7z
+
+# log
+*.log
+
+__pycache__/

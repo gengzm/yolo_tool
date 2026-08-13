@@ -1,0 +1,33 @@
+# ============================================================
+# YOLO 工具链 依赖
+# ============================================================
+# 安装（清华源）:
+#   pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+#
+# 版本策略:
+#   - 仅 ultralytics（YOLO）锁定主版本，其他包给宽松范围，交给 pip 解析
+#   - 三条"适配约束"必须保留（本机 torch 2.2.x 只支持 numpy 1.x）:
+#     1) numpy < 2.0     （torch 2.2.x 不支持 numpy 2.x）
+#     2) opencv-python < 4.11（4.12+ 强制 numpy>=2.0，会拉爆 numpy）
+#     3) onnxruntime < 2.0   （2.x 同样强制 numpy>=2.0）
+#     4) torch < 2.5     （2.5+ 才支持 numpy 2.x，升版需同步放宽上面三条）
+# ============================================================
+
+# ---- 核心: YOLO（唯一锁定主版本的依赖） ----
+ultralytics>=8.4.0,<9.0            # YOLO26 需要 8.4+（本机 8.4.117）
+
+# ---- 深度学习框架 ----
+torch>=2.2.0,<2.5                  # 本机已装 2.2.2（CPU/MPS）；<2.5 以保持 numpy 1.x
+torchvision>=0.17.0,<0.20          # 与 torch 2.2~2.4 对应
+
+# ---- 数值 / 图像 ----
+numpy>=1.24,<2.0                   # 适配约束 1：必须 1.x
+opencv-python>=4.8,<4.11           # 适配约束 2：4.10.x 是兼容 numpy 1.x 的最后主版本
+PyYAML>=6.0
+matplotlib>=3.7                    # 推理可视化用（Agg 后端）
+Pillow>=10.0
+
+# ---- ONNX 导出（ultralytics export 依赖） ----
+onnx>=1.14
+onnxruntime>=1.17,<2.0             # 适配约束 3
+onnxslim>=0.1.82                   # onnx 模型简化
