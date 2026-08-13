@@ -396,7 +396,7 @@ def process_dataset(source_dir: str, dataset_dir: str, task_type: str = "detect"
     log_info(f"  - data.yaml: {yaml_path}")
     log_info("=" * 60)
 
-    # 6. 生成/更新项目信息 info.yaml（数据目录同级，供各 step 与界面读取）
+    # 6. 生成/更新项目信息 info.yaml（数据目录内部，供各 step 与界面读取）
     viz_dir = config.DEFAULT_VISUALIZE_DIR
     if not viz_dir:
         viz_dir = str(Path(dataset_dir).parent / "可视化标注")

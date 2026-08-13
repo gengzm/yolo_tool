@@ -4,7 +4,7 @@ Step 3: YOLO 训练
 - 使用 ultralytics YOLO 进行训练
 - 支持不同任务类型（detect / segment / obb / pose）
 - 不同类别可配置不同的训练参数
-- 训练结果输出到数据集同目录的 run_out
+- 训练结果输出到数据根目录 {DATA_ROOT}/run_out
 
 用法:
     python s3_train.py \\
@@ -25,10 +25,10 @@ import yaml
 from ultralytics import YOLO
 
 import config
-from config import CLASS_TRAIN_OVERRIDE, CLASS_NAMES, TASK_MODELS, EPOCHS, BATCH, IMGSZ
+from config import CLASS_TRAIN_OVERRIDE, CLASS_NAMES, EPOCHS, BATCH, IMGSZ, task_model_name
 from utils import (
     ensure_dir, log_info, log_warn, log_error,
-    load_info_yaml, update_info_yaml, get_project_config,
+    load_info_yaml, update_info_yaml, get_project_config, resolve_model_path,
 )
 
 
@@ -39,18 +39,20 @@ def load_data_config(data_path: str) -> dict:
 
 
 def get_task_model(task_type: str) -> str:
-    """获取任务对应的 YOLO 模型名称（取自 config.TASK_MODELS）"""
-    return TASK_MODELS.get(task_type, "yolo26n.pt")
+    """获取任务对应的 YOLO 模型路径（本地 models 目录优先，否则在线下载）"""
+    return resolve_model_path(task_model_name(task_type))
 
 
 def get_run_out_dir(data_path: str) -> str:
     """
     确定 run_out 输出目录：
-    数据集同目录下的 run_out / 时间戳子目录
+    数据根目录 {DATA_ROOT}/run_out / 时间戳子目录
     """
     data_dir = Path(data_path).parent.resolve()
+    cfg = get_project_config(str(data_dir))
+    base = cfg.get("run_out_dir") or str(Path(data_dir) / "run_out")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = data_dir / "run_out" / timestamp
+    run_dir = Path(base) / timestamp
     ensure_dir(str(run_dir))
     return str(run_dir)
 
@@ -61,7 +63,7 @@ def merge_class_params(task_type: str, data_config: dict) -> dict:
     全局参数统一取自 config 顶层变量，类别覆盖来自 CLASS_TRAIN_OVERRIDE
     """
     params = {
-        "model": TASK_MODELS.get(task_type, "yolo26n.pt"),
+        "model": get_task_model(task_type),
         "epochs": EPOCHS,
         "batch": BATCH,
         "imgsz": IMGSZ,

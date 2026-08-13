@@ -27,6 +27,25 @@ def ensure_dir(path: str) -> Path:
     return p
 
 
+def resolve_model_path(model_ref: str) -> str:
+    """
+    解析模型引用为可加载路径：
+    1) 绝对/相对路径 → 原样返回
+    2) 纯文件名 → 优先在 config.MODELS_DIR 下找本地文件（如 yolo26n-obb.pt）
+    3) 找不到 → 原样返回，交给 ultralytics 在线下载
+    """
+    if not model_ref:
+        return model_ref
+    if os.path.sep in model_ref or (os.path.altsep and os.path.altsep in model_ref):
+        return model_ref
+    local = Path(config.MODELS_DIR) / model_ref
+    if local.exists():
+        log_info(f"Using local model: {local}")
+        return str(local)
+    log_warn(f"Model not in {config.MODELS_DIR}, fallback to ultralytics download: {model_ref}")
+    return model_ref
+
+
 def find_image_json_pairs(source_dir: str) -> List[Tuple[str, Optional[str]]]:
     """
     扫描目录，返回 (图片路径, LabelMe JSON路径) 对
@@ -194,8 +213,8 @@ def get_image_size(img_path: str) -> Tuple[int, int]:
 # ======================== 项目信息文件 (info.yaml) ========================
 
 def get_info_yaml_path(dataset_dir: str) -> Path:
-    """info.yaml 保存在数据目录同级（方便界面与各 step 统一读取）"""
-    return Path(dataset_dir).parent / config.INFO_YAML_NAME
+    """info.yaml 保存在数据目录内部（{dataset_dir}/info.yaml），作为该项目的档案"""
+    return Path(dataset_dir) / config.INFO_YAML_NAME
 
 
 def load_info_yaml(dataset_dir: str) -> dict:
@@ -212,7 +231,7 @@ def load_info_yaml(dataset_dir: str) -> dict:
 
 
 def save_info_yaml(dataset_dir: str, info: dict) -> Path:
-    """保存 info.yaml 到数据目录同级，自动补充 updated_at 时间戳"""
+    """保存 info.yaml 到数据目录内部（{dataset_dir}/info.yaml），自动补充 updated_at 时间戳"""
     from datetime import datetime
     p = get_info_yaml_path(dataset_dir)
     data = dict(info)
@@ -224,9 +243,11 @@ def save_info_yaml(dataset_dir: str, info: dict) -> Path:
     return p
 
 
-def update_info_yaml(dataset_dir: str, **fields) -> Path:
-    """更新 info.yaml（与已有内容合并，保留各 step 写入的字段）"""
+def update_info_yaml(dataset_dir: str, remove_keys: list = None, **fields) -> Path:
+    """更新 info.yaml（与已有内容合并，保留各 step 写入的字段，可移除废弃键）"""
     info = load_info_yaml(dataset_dir)
+    for k in (remove_keys or []):
+        info.pop(k, None)
     info["dataset_dir"] = str(Path(dataset_dir).resolve())  # 始终记录定位目录
     info.update(fields)
     return save_info_yaml(dataset_dir, info)
@@ -244,26 +265,28 @@ def get_project_config(dataset_dir: str = None) -> dict:
     项目配置解析（供各 step 与界面统一使用，直接用 dataset_dir 定位 info.yaml）
     优先级: 命令行参数(调用方处理) > info.yaml 记录 > config 默认值
     返回键: task_type/source_dir/dataset_dir/data_yaml/run_out_dir/
-            visualize_dir/train_ratio/val_ratio/epochs/batch/imgsz
-    若 info.yaml 另有 weights/deploy_dir 等记录，也会一并带出。
+            visualize_dir/weights_dir/train_ratio/val_ratio/epochs/batch/imgsz
+    若 info.yaml 另有 weights/weights_dir 等记录，也会一并带出。
     """
     ds_dir = resolve_dataset_dir(dataset_dir)
     info = load_info_yaml(ds_dir)
     if not dataset_dir:                     # 未显式指定时，以 info.yaml 记录为准
         ds_dir = info.get("dataset_dir") or ds_dir
     ds_dir = str(Path(ds_dir).resolve())
+    # 数据根目录：config 指定优先，否则回退数据集目录的父目录
+    data_root = str(Path(config.DEFAULT_DATA_ROOT).resolve()) if getattr(config, "DEFAULT_DATA_ROOT", None) else str(Path(ds_dir).parent)
     defaults = {
+        "data_root": data_root,
         "task_type": config.TASK_TYPE,
         "source_dir": config.DEFAULT_SOURCE_DIR,
         "dataset_dir": ds_dir,
         "data_yaml": str(Path(ds_dir) / "data.yaml"),
-        "run_out_dir": config.DEFAULT_RUN_OUT_DIR or str(Path(ds_dir) / "run_out"),
-        "visualize_dir": config.DEFAULT_VISUALIZE_DIR or str(Path(ds_dir).parent / "可视化标注"),
+        "run_out_dir": config.DEFAULT_RUN_OUT_DIR or str(Path(data_root) / "run_out"),
+        "visualize_dir": config.DEFAULT_VISUALIZE_DIR or str(Path(data_root) / "可视化标注"),
         "infer_input": config.INFER_INPUT or str(Path(ds_dir) / "val" / "images"),
         "conf": config.CONF,
         "iou": config.IOU,
-        "convert_dir": config.DEFAULT_CONVERT_DIR,
-        "deploy_dir": config.DEFAULT_DEPLOY_DIR,
+        "weights_dir": config.DEFAULT_WEIGHTS_DIR or str(Path(data_root) / "权重"),
         "train_ratio": config.TRAIN_RATIO,
         "val_ratio": config.VAL_RATIO,
         "epochs": config.EPOCHS,

@@ -11,11 +11,6 @@ CLASS_NAMES = []
 # 类别 -> 编号映射（随 CLASS_NAMES 同步更新）
 CLASS_TO_IDX = {}
 
-
-# ======================== 项目信息文件 ========================
-# 记录标签/权重等运行状态，保存在数据目录同级，供各 step 与外部界面读取
-INFO_YAML_NAME = "info.yaml"
-
 # ======================== 训练参数（所有任务统一） ========================
 # 学习率(lr0/lrf)、cos_lr、patience 等超参未配置时
 # 直接用 ultralytics 内置默认值，无需在此重复定义
@@ -41,24 +36,36 @@ class CLASS_TASK_TYPE:
 
 TASK_TYPE = CLASS_TASK_TYPE.OBB
 
+# ======================== 数据根目录 ========================
+# 所有数据资产统一放在该根目录下：
+#   {DATA_ROOT}/原始数据/        源标注（source_dir）
+#   {DATA_ROOT}/训练集_{TASK}/   生成的 YOLO 数据集（含 info.yaml）
+#   {DATA_ROOT}/run_out/         step3 训练输出（时间戳子目录）
+#   {DATA_ROOT}/可视化标注/      step2 可视化输出
+#   {DATA_ROOT}/推理结果/        step4 推理可视化 / 推理json / 误差分析
+#   {DATA_ROOT}/权重           step5 转换产物（yolo_<task>_detector.onnx / .engine / .pt，即最终部署权重）
+# 代码目录只放代码，不产生数据。
+DEFAULT_DATA_ROOT = "/Users/Mac/Code/TemplateMatch"
+
 # ======================== 默认路径 ========================
-# 可视化输出根目录（None = 自动计算为数据集目录的同级"可视化标注"目录）
+# 原始图片 + LabelMe JSON 目录
+DEFAULT_SOURCE_DIR = f"{DEFAULT_DATA_ROOT}/2000中筛选出的异常"
+# 生成的 YOLO 数据集目录
+DEFAULT_DATASET_DIR = f"{DEFAULT_DATA_ROOT}/训练集_{TASK_TYPE.upper()}"
+# 可视化输出根目录（None = 自动 = {DATA_ROOT}/可视化标注）
 DEFAULT_VISUALIZE_DIR = None
-# 数据集根目录（可在命令行覆盖）
-DEFAULT_SOURCE_DIR = "/Users/Mac/Code/TemplateMatch/2000中筛选出的异常"       # 原始图片 + LabelMe JSON
-DEFAULT_DATASET_DIR = f"/Users/Mac/Code/TemplateMatch/训练集_{TASK_TYPE.upper()}"   # 生成的 YOLO 数据集
-DEFAULT_RUN_OUT_DIR = None                    # None=自动放到 dataset_dir 同级的 run_out
+# 训练输出根目录（None = 自动 = {DATA_ROOT}/run_out）
+DEFAULT_RUN_OUT_DIR = None
+# 最终权重目录（None = 自动 = {DATA_ROOT}/权重）
+# step5 转换的 onnx/engine 与 best.pt 统一放这里，即最终部署产物（不再单独拷贝）
+DEFAULT_WEIGHTS_DIR = None
+
 # ======================== 推理参数 ========================
 # 推理输入路径（None = 默认取数据集目录的 val/images，即验证集）
 INFER_INPUT = None
 # 置信度阈值 / IoU 阈值
 CONF = 0.25
 IOU = 0.45
-
-# ======================== 转换/部署目录 ========================
-# 相对路径基于运行脚本时的当前工作目录（run_all.sh 在项目根运行）
-DEFAULT_CONVERT_DIR = "./converted_models"   # step5 输出目录
-DEFAULT_DEPLOY_DIR = "./deploy_weights"      # step6 拷贝目标
 
 # ======================== 切分比例 ========================
 TRAIN_RATIO = 0.8
@@ -71,6 +78,9 @@ LABELME_SUFFIX = ".json"
 # 支持的图片格式
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
+# ======================== 项目信息文件 ========================
+# 记录标签/权重等运行状态，保存在数据目录内部（{dataset_dir}/info.yaml），供各 step 与外部界面读取
+INFO_YAML_NAME = "info.yaml"
 
 # ======================== 可视化颜色配置 ========================
 # 20 种类别颜色 (BGR 格式，OpenCV 使用)
@@ -121,13 +131,25 @@ POINT_COLORS_BGR = [
     (255, 255, 255), # 纯白
 ]
 
-# 任务类型 → 预训练模型（唯一按任务区分的配置）
-TASK_MODELS = {
-    CLASS_TASK_TYPE.DETECT: "yolo26n.pt",      # 检测
-    CLASS_TASK_TYPE.SEGMENT: "yolo26n-seg.pt", # 分割
-    CLASS_TASK_TYPE.POSE: "yolo26n-pose.pt",   # 关键点
-    CLASS_TASK_TYPE.OBB: "yolo26n-obb.pt",     # 旋转框
-}
+# ======================== 预训练模型 ========================
+# 本地模型目录（放入 yolo26n-*.pt / yolo26s-*.pt 等文件，训练时自动优先使用）
+# 目录不存在或找不到对应文件时，回退 ultralytics 在线下载
+MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+
+# 模型规格: n(轻量) / s(标准) / m / l / x，切换规格只需改这里
+MODEL_SIZE = "n"
+
+# 任务类型 → 模型文件名（自动按 MODEL_SIZE 生成）
+def task_model_name(task_type: str = None) -> str:
+    """按任务类型 + MODEL_SIZE 生成模型文件名，如 yolo26n-obb.pt"""
+    t = (task_type or TASK_TYPE).lower()
+    if t == CLASS_TASK_TYPE.SEGMENT:
+        return f"yolo26{MODEL_SIZE}-seg.pt"
+    if t == CLASS_TASK_TYPE.POSE:
+        return f"yolo26{MODEL_SIZE}-pose.pt"
+    if t == CLASS_TASK_TYPE.OBB:
+        return f"yolo26{MODEL_SIZE}-obb.pt"
+    return f"yolo26{MODEL_SIZE}.pt"   # detect
 
 def set_class_names(names: list):
     """

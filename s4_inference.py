@@ -6,13 +6,14 @@ Step 4: 推理
 - 输出：
   * 推理可视化   — 推理结果叠加标注的图片
   * 推理JSON     — 推理结果 JSON 格式（方便后续叠加训练集）
-  * 误差结果     — 预测与真值误差图表（平均误差、中值误差、std）
+  * 误差分析     — 预测与真值误差图表（平均误差、中值误差、标准差），
+                   bbox 中心/宽高误差 + 点误差（obb 顶点/segment 轮廓/pose 关键点）
 
-目录结构（基于 data.yaml 所在目录）:
-    {dataset_dir}/推理结果/
+目录结构（统一放数据根目录 {DATA_ROOT}，不在训练集内）:
+    {DATA_ROOT}/推理结果/
     ├── 推理可视化/
     ├── 推理json/
-    └── 误差结果/
+    └── 误差分析/
 
 用法:
     python s4_inference.py \\
@@ -42,38 +43,66 @@ import yaml
 from ultralytics import YOLO
 
 from config import CLASS_NAMES, CLASS_COLORS_BGR, POINT_COLORS_BGR, IMAGE_EXTENSIONS
-from utils import ensure_dir, log_info, log_warn, log_error, load_info_yaml, get_project_config
+from utils import (
+    ensure_dir, log_info, log_warn, log_error,
+    get_project_config, load_labelme_json, normalize_points,
+)
 import config
 
 
-def find_latest_model(dataset_dir: str) -> str:
+def _training_complete(train_dir: Path) -> bool:
+    """训练是否跑完设定 epoch（results.csv 数据行数 >= args.yaml 的 epochs）"""
+    args_p = train_dir / "args.yaml"
+    results_p = train_dir / "results.csv"
+    if not args_p.exists() or not results_p.exists():
+        return False
+    try:
+        args = yaml.safe_load(args_p.read_text(encoding="utf-8")) or {}
+        epochs = int(args.get("epochs") or 0)
+        with open(results_p, encoding="utf-8") as f:
+            rows = sum(1 for _ in f) - 1  # 减去表头行
+        return epochs > 0 and rows >= max(1, int(epochs * 0.95))
+    except Exception:
+        return False
+
+
+def find_latest_model(run_out_dir: str) -> str:
     """
-    自动查找 run_out 下最新的 best.pt 模型
+    自动查找 run_out 下最新且训练完成的 best.pt 模型。
+    优先完整训练（results.csv 已达 args.yaml 设定的 epochs），
+    避免选中训到一半就中断的坏模型；无完整训练时才退回最新 best.pt 并警告。
     """
-    run_out_dir = Path(dataset_dir) / "run_out"
-    if not run_out_dir.exists():
-        log_error(f"run_out directory not found: {run_out_dir}")
+    run_out_path = Path(run_out_dir)
+    if not run_out_path.exists():
+        log_error(f"run_out directory not found: {run_out_path}")
         sys.exit(1)
 
     # 遍历所有时间戳子目录，找最新
-    best_models = list(run_out_dir.rglob("**/weights/best.pt"))
+    best_models = list(run_out_path.rglob("**/weights/best.pt"))
     if not best_models:
-        log_error(f"No best.pt found in {run_out_dir}")
+        log_error(f"No best.pt found in {run_out_path}")
         sys.exit(1)
 
+    # 优先完整训练，跳过中断/未完成的
+    completed = [p for p in best_models if _training_complete(p.parent.parent)]
+    pool = completed or best_models
+    if not completed:
+        log_warn("No completed training found, falling back to latest best.pt "
+                 "(may be an interrupted run)")
+
     # 按修改时间排序，取最新的
-    best_models.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    latest = str(best_models[0])
+    pool.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    latest = str(pool[0])
     log_info(f"Latest model: {latest}")
     return latest
 
 
-def get_output_dirs(dataset_dir: str) -> dict:
-    """获取推理输出目录"""
-    base = Path(dataset_dir) / "推理结果"
+def get_output_dirs(data_root: str) -> dict:
+    """获取推理输出目录（统一放数据根目录，不放训练集内）"""
+    base = Path(data_root) / "推理结果"
     vis_dir = ensure_dir(str(base / "推理可视化"))
     json_dir = ensure_dir(str(base / "推理json"))
-    err_dir = ensure_dir(str(base / "误差结果"))
+    err_dir = ensure_dir(str(base / "误差分析"))
     return {
         "vis": str(vis_dir),
         "json": str(json_dir),
@@ -101,31 +130,80 @@ def collect_input_images(input_path: str) -> list:
         return []
 
 
-def load_ground_truth(label_dir: str, image_stem: str) -> list:
+def load_ground_truth(label_dir: str, image_stem: str,
+                      json_dir: str = None, task_type: str = "detect") -> list:
     """
-    加载指定图片的真值标注（YOLO 格式）
+    加载指定图片的真值标注
+    优先读 YOLO txt（{label_dir}/{stem}.txt，归一化坐标），按任务类型解析：
+      detect: class cx cy w h                 → bbox
+      pose:   class cx cy w h x y v x y v...  → bbox + 关键点
+      segment/obb: class x1 y1 x2 y2 ...      → 点集 + 由点计算的 bbox
+    无 txt 时回退读 LabelMe json（{json_dir}/{stem}.json，绝对像素转归一化）
     返回: list of dicts: [{"class_id": int, "bbox": (cx,cy,w,h), "points": [[],...]}, ...]
     """
+    # 1) YOLO txt 优先
     label_path = Path(label_dir) / f"{image_stem}.txt"
-    if not label_path.exists():
-        return []
+    if label_path.exists():
+        gt_list = []
+        with open(label_path, "r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.strip().split()
+                if not parts:
+                    continue
+                class_id = int(parts[0])
+                values = [float(x) for x in parts[1:]]
+                item = {"class_id": class_id}
+                if task_type in ("segment", "obb"):
+                    # 全部是点：class x1 y1 x2 y2 ...
+                    pts = np.array(values).reshape(-1, 2)
+                    item["points"] = pts.tolist()
+                    xs, ys = pts[:, 0], pts[:, 1]
+                    item["bbox"] = ((xs.min() + xs.max()) / 2,
+                                    (ys.min() + ys.max()) / 2,
+                                    xs.max() - xs.min(),
+                                    ys.max() - ys.min())
+                elif task_type == "pose" and len(values) >= 4:
+                    item["bbox"] = tuple(values[:4])
+                    if len(values) > 4:
+                        kpt = np.array(values[4:]).reshape(-1, 3)
+                        item["points"] = [(x, y) for x, y, v in kpt if v > 0]
+                elif len(values) >= 4:
+                    item["bbox"] = tuple(values[:4])
+                gt_list.append(item)
+        return gt_list
 
-    gt_list = []
-    with open(label_path, "r", encoding="utf-8") as f:
-        for line in f:
-            parts = line.strip().split()
-            if not parts:
-                continue
-            class_id = int(parts[0])
-            values = [float(x) for x in parts[1:]]
-            item = {"class_id": class_id}
-            if len(values) >= 4:
-                item["bbox"] = tuple(values[:4])
-            if len(values) > 4:
-                pts = np.array(values[4:]).reshape(-1, 2)
-                item["points"] = pts.tolist()
-            gt_list.append(item)
-    return gt_list
+    # 2) 回退 LabelMe json（真值点来源之一）
+    if json_dir:
+        json_path = Path(json_dir) / f"{image_stem}.json"
+        if json_path.exists():
+            data = load_labelme_json(str(json_path))
+            img_w = data.get("imageWidth", 0)
+            img_h = data.get("imageHeight", 0)
+            gt_list = []
+            for shape in data.get("shapes", []):
+                pts = np.array(shape.get("points", []), dtype=np.float64)
+                if len(pts) == 0:
+                    continue
+                label = shape.get("label", "")
+                class_id = (config.CLASS_NAMES.index(label)
+                            if label in config.CLASS_NAMES else None)
+                if class_id is None:
+                    continue
+                item = {"class_id": class_id}
+                if img_w > 0 and img_h > 0:
+                    norm = normalize_points(pts, img_w, img_h)
+                    item["points"] = norm.tolist()
+                    xs, ys = pts[:, 0], pts[:, 1]
+                    item["bbox"] = (
+                        (xs.min() + xs.max()) / 2 / img_w,
+                        (ys.min() + ys.max()) / 2 / img_h,
+                        (xs.max() - xs.min()) / img_w,
+                        (ys.max() - ys.min()) / img_h,
+                    )
+                gt_list.append(item)
+            return gt_list
+
+    return []
 
 
 def calc_bbox_errors(gt_boxes, pred_boxes, img_w: int, img_h: int) -> list:
@@ -220,49 +298,162 @@ def _calc_iou(box1: tuple, box2: tuple) -> float:
     return inter / union if union > 0 else 0
 
 
-def generate_error_report(all_errors: list, err_dir: str):
+def extract_pred_points(result, task_type: str) -> list:
     """
-    生成误差分析报告（文本 + 图表）
+    提取预测实例的点集（像素坐标）
+    obb: 4 顶点；segment: 轮廓点；pose: 可见关键点
+    返回: [[(x, y), ...], ...] 每个实例一个点集
+    """
+    sets = []
+    if result.boxes is None and (task_type != "obb" or getattr(result, "obb", None) is None):
+        return sets
+    if task_type == "obb" and result.obb is not None:
+        for pts in result.obb.xyxyxyxy:
+            sets.append(pts.cpu().numpy().tolist())
+    elif task_type == "segment" and result.masks is not None:
+        for pts in result.masks.xy:
+            sets.append(pts.tolist())
+    elif task_type == "pose" and result.keypoints is not None:
+        for kpts in result.keypoints.data:
+            pts = [(float(x), float(y))
+                   for x, y, c in kpts.cpu().numpy() if c > 0.5]
+            if pts:
+                sets.append(pts)
+    return sets
+
+
+def calc_point_errors(gt_items: list, pred_point_sets: list,
+                      img_w: int, img_h: int) -> list:
+    """
+    计算点误差：真值每个点匹配最近的预测点（贪心），返回像素距离列表
+    gt_items: load_ground_truth 结果（points 为归一化坐标）
+    pred_point_sets: extract_pred_points 结果（像素坐标）
+    """
+    errors = []
+    all_pred = [(float(x), float(y)) for pts in pred_point_sets for (x, y) in pts]
+    if not all_pred:
+        return errors
+    for gt in gt_items:
+        gt_pts = gt.get("points")
+        if not gt_pts:
+            continue
+        for gx_n, gy_n in gt_pts:
+            gx, gy = gx_n * img_w, gy_n * img_h
+            bx, by = min(all_pred,
+                         key=lambda p: (p[0] - gx) ** 2 + (p[1] - gy) ** 2)
+            errors.append(float(np.hypot(bx - gx, by - gy)))
+    return errors
+
+
+def _summarize(values) -> dict:
+    """均值 / 中值 / 标准差 / min / max 汇总"""
+    arr = np.asarray(values, dtype=float)
+    return {
+        "count": int(len(arr)),
+        "mean": float(np.mean(arr)),
+        "median": float(np.median(arr)),
+        "std": float(np.std(arr)),
+        "min": float(np.min(arr)),
+        "max": float(np.max(arr)),
+    }
+
+
+def _plot_hist_with_stats(ax, data, title, xlabel, color, stat):
+    """直方图 + 均值/中值竖线（平均误差、中值误差、标准差）"""
+    ax.hist(data, bins=30, color=color, edgecolor="white", alpha=0.8)
+    ax.axvline(stat["mean"], color="red", linestyle="--",
+               label=f"Mean: {stat['mean']:.2f}")
+    ax.axvline(stat["median"], color="green", linestyle="--",
+               label=f"Median: {stat['median']:.2f}")
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel("Count")
+    ax.set_title(f"{title}\n"
+                 f"Mean={stat['mean']:.2f}, Median={stat['median']:.2f}, Std={stat['std']:.2f}")
+    ax.legend()
+
+
+def _plot_stats_bar(stats: dict, err_dir: str):
+    """Mean / Median / Std 汇总条形图（仅像素类误差指标）"""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    keys = [k for k in ("center_error", "width_error", "height_error",
+                        "point_error") if k in stats]
+    if not keys:
+        return
+    labels = {"center_error": "Center Error", "width_error": "Width Error",
+              "height_error": "Height Error", "point_error": "Point Error"}
+    names = [labels[k] for k in keys]
+    means = [stats[k]["mean"] for k in keys]
+    medians = [stats[k]["median"] for k in keys]
+    stds = [stats[k]["std"] for k in keys]
+
+    x = np.arange(len(names))
+    width = 0.25
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.bar(x - width, means, width, label="Mean", color="steelblue")
+    ax.bar(x, medians, width, label="Median", color="coral")
+    ax.bar(x + width, stds, width, label="Std", color="mediumseagreen")
+    ax.set_xticks(x)
+    ax.set_xticklabels(names)
+    ax.set_ylabel("pixels (px)")
+    ax.set_title("Error Metrics: Mean / Median / Std (px)")
+    ax.legend()
+    for xi, (m, md, s) in enumerate(zip(means, medians, stds)):
+        ax.text(xi - width, m, f"{m:.1f}", ha="center", va="bottom", fontsize=8)
+        ax.text(xi, md, f"{md:.1f}", ha="center", va="bottom", fontsize=8)
+        ax.text(xi + width, s, f"{s:.1f}", ha="center", va="bottom", fontsize=8)
+    plt.tight_layout()
+    bar_path = os.path.join(err_dir, "error_stats_bar.png")
+    fig.savefig(bar_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    log_info(f"Error stats bar chart saved: {bar_path}")
+
+
+def generate_error_report(all_errors: list, point_errors: list, err_dir: str):
+    """
+    生成误差分析报告（JSON 统计 + 图表）
+    - error_stats.json     各指标 Mean/Median/Std/Min/Max
+    - error_analysis.png   误差分布直方图（含点误差，当有点真值时）
+    - error_stats_bar.png  Mean / Median / Std 汇总条形图
     """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    if not all_errors:
+    if not all_errors and not point_errors:
         log_warn("No errors to report (no ground truth available)")
         return
 
-    # 汇总统计
-    center_errors = [e["center_error_px"] for e in all_errors]
-    width_errors = [e["width_error_px"] for e in all_errors]
-    height_errors = [e["height_error_px"] for e in all_errors]
-    ious = [e["iou"] for e in all_errors]
+    ensure_dir(err_dir)
 
-    stats = {
-        "total_comparisons": len(all_errors),
-        "center_error": {
-            "mean": float(np.mean(center_errors)),
-            "median": float(np.median(center_errors)),
-            "std": float(np.std(center_errors)),
-            "min": float(np.min(center_errors)),
-            "max": float(np.max(center_errors)),
-        },
-        "width_error": {
-            "mean": float(np.mean(width_errors)),
-            "median": float(np.median(width_errors)),
-            "std": float(np.std(width_errors)),
-        },
-        "height_error": {
-            "mean": float(np.mean(height_errors)),
-            "median": float(np.median(height_errors)),
-            "std": float(np.std(height_errors)),
-        },
-        "iou": {
-            "mean": float(np.mean(ious)),
-            "median": float(np.median(ious)),
-            "std": float(np.std(ious)),
-        },
-    }
+    # 汇总统计
+    stats = {}
+    plot_specs = []
+    if all_errors:
+        center_errors = [e["center_error_px"] for e in all_errors]
+        width_errors = [e["width_error_px"] for e in all_errors]
+        height_errors = [e["height_error_px"] for e in all_errors]
+        ious = [e["iou"] for e in all_errors]
+        stats["total_comparisons"] = len(all_errors)
+        stats["center_error"] = _summarize(center_errors)
+        stats["width_error"] = _summarize(width_errors)
+        stats["height_error"] = _summarize(height_errors)
+        stats["iou"] = _summarize(ious)
+        plot_specs = [
+            ("center_error", center_errors, "Center Point Error",
+             "Center Error (pixels)", "steelblue"),
+            ("width_error", width_errors, "Width Error",
+             "Width Error (pixels)", "coral"),
+            ("height_error", height_errors, "Height Error",
+             "Height Error (pixels)", "mediumseagreen"),
+            ("iou", ious, "IoU Distribution", "IoU", "mediumpurple"),
+        ]
+    if point_errors:
+        stats["point_error"] = _summarize(point_errors)
+        plot_specs.append(("point_error", point_errors, "Point Error",
+                           "Point Error (pixels)", "darkorange"))
 
     # 保存统计 JSON
     stats_path = os.path.join(err_dir, "error_stats.json")
@@ -270,49 +461,17 @@ def generate_error_report(all_errors: list, err_dir: str):
         json.dump(stats, f, indent=2, ensure_ascii=False)
     log_info(f"Error stats saved: {stats_path}")
 
-    # 绘制误差分布图
-    fig, axes = plt.subplots(2, 2, figsize=(14, 12))
+    # 绘制误差分布直方图（有点误差时扩为 2x3）
+    has_point = "point_error" in stats
+    nrows, ncols = (2, 3) if has_point else (2, 2)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(18 if has_point else 14, 12))
     fig.suptitle("Prediction vs Ground Truth Error Analysis", fontsize=14)
+    axes = axes.flatten()
 
-    # 中心点误差直方图
-    ax = axes[0, 0]
-    ax.hist(center_errors, bins=30, color="steelblue", edgecolor="white", alpha=0.8)
-    ax.axvline(np.mean(center_errors), color="red", linestyle="--", label=f"Mean: {stats['center_error']['mean']:.2f}px")
-    ax.axvline(np.median(center_errors), color="green", linestyle="--", label=f"Median: {stats['center_error']['median']:.2f}px")
-    ax.set_xlabel("Center Error (pixels)")
-    ax.set_ylabel("Count")
-    ax.set_title(f"Center Point Error\nMean={stats['center_error']['mean']:.2f}px, Median={stats['center_error']['median']:.2f}px, Std={stats['center_error']['std']:.2f}px")
-    ax.legend()
-
-    # 宽度误差
-    ax = axes[0, 1]
-    ax.hist(width_errors, bins=30, color="coral", edgecolor="white", alpha=0.8)
-    ax.axvline(np.mean(width_errors), color="red", linestyle="--", label=f"Mean: {stats['width_error']['mean']:.2f}px")
-    ax.axvline(np.median(width_errors), color="green", linestyle="--", label=f"Median: {stats['width_error']['median']:.2f}px")
-    ax.set_xlabel("Width Error (pixels)")
-    ax.set_ylabel("Count")
-    ax.set_title(f"Width Error\nMean={stats['width_error']['mean']:.2f}px, Median={stats['width_error']['median']:.2f}px, Std={stats['width_error']['std']:.2f}px")
-    ax.legend()
-
-    # 高度误差
-    ax = axes[1, 0]
-    ax.hist(height_errors, bins=30, color="mediumseagreen", edgecolor="white", alpha=0.8)
-    ax.axvline(np.mean(height_errors), color="red", linestyle="--", label=f"Mean: {stats['height_error']['mean']:.2f}px")
-    ax.axvline(np.median(height_errors), color="green", linestyle="--", label=f"Median: {stats['height_error']['median']:.2f}px")
-    ax.set_xlabel("Height Error (pixels)")
-    ax.set_ylabel("Count")
-    ax.set_title(f"Height Error\nMean={stats['height_error']['mean']:.2f}px, Median={stats['height_error']['median']:.2f}px, Std={stats['height_error']['std']:.2f}px")
-    ax.legend()
-
-    # IoU 分布
-    ax = axes[1, 1]
-    ax.hist(ious, bins=30, color="mediumpurple", edgecolor="white", alpha=0.8)
-    ax.axvline(np.mean(ious), color="red", linestyle="--", label=f"Mean: {stats['iou']['mean']:.3f}")
-    ax.axvline(np.median(ious), color="green", linestyle="--", label=f"Median: {stats['iou']['median']:.3f}")
-    ax.set_xlabel("IoU")
-    ax.set_ylabel("Count")
-    ax.set_title(f"IoU Distribution\nMean={stats['iou']['mean']:.3f}, Median={stats['iou']['median']:.3f}, Std={stats['iou']['std']:.3f}")
-    ax.legend()
+    for ax, (key, data, title, xlabel, color) in zip(axes, plot_specs):
+        _plot_hist_with_stats(ax, data, title, xlabel, color, stats[key])
+    for ax in axes[len(plot_specs):]:
+        ax.axis("off")
 
     plt.tight_layout()
     chart_path = os.path.join(err_dir, "error_analysis.png")
@@ -320,18 +479,27 @@ def generate_error_report(all_errors: list, err_dir: str):
     plt.close(fig)
     log_info(f"Error chart saved: {chart_path}")
 
+    # 汇总条形图（Mean / Median / Std）
+    _plot_stats_bar(stats, err_dir)
+
     # 打印统计摘要
-    log_info("=" * 50)
+    log_info("=" * 60)
     log_info("Error Analysis Summary:")
-    log_info(f"  Center Error - Mean: {stats['center_error']['mean']:.2f}px, "
-             f"Median: {stats['center_error']['median']:.2f}px, STD: {stats['center_error']['std']:.2f}px")
-    log_info(f"  Width Error  - Mean: {stats['width_error']['mean']:.2f}px, "
-             f"Median: {stats['width_error']['median']:.2f}px, STD: {stats['width_error']['std']:.2f}px")
-    log_info(f"  Height Error - Mean: {stats['height_error']['mean']:.2f}px, "
-             f"Median: {stats['height_error']['median']:.2f}px, STD: {stats['height_error']['std']:.2f}px")
-    log_info(f"  IoU          - Mean: {stats['iou']['mean']:.3f}, "
-             f"Median: {stats['iou']['median']:.3f}, STD: {stats['iou']['std']:.3f}")
-    log_info("=" * 50)
+    names = {"center_error": "Center Error", "width_error": "Width Error",
+             "height_error": "Height Error", "iou": "IoU",
+             "point_error": "Point Error"}
+    for key in ("center_error", "width_error", "height_error",
+                "point_error", "iou"):
+        if key not in stats:
+            continue
+        s = stats[key]
+        if key == "iou":
+            log_info(f"  {names[key]:<14} - Mean: {s['mean']:.3f}, "
+                     f"Median: {s['median']:.3f}, STD: {s['std']:.3f}")
+        else:
+            log_info(f"  {names[key]:<14} - Mean: {s['mean']:.2f}px, "
+                     f"Median: {s['median']:.2f}px, STD: {s['std']:.2f}px")
+    log_info("=" * 60)
 
 
 def draw_prediction(img: np.ndarray, result, task_type: str,
@@ -340,14 +508,25 @@ def draw_prediction(img: np.ndarray, result, task_type: str,
     if class_colors is None:
         class_colors = CLASS_COLORS_BGR
 
-    if result.boxes is None:
+    obb_data = getattr(result, "obb", None)
+    # obb 模型 result.boxes 为 None，预测数据在 result.obb
+    if result.boxes is None and (obb_data is None or len(obb_data) == 0):
         return img
 
-    for i, box in enumerate(result.boxes):
-        cls_id = int(box.cls[0])
-        conf = float(box.conf[0])
+    n = len(result.boxes) if result.boxes is not None else len(obb_data)
+    for i in range(n):
+        if result.boxes is not None:
+            box = result.boxes[i]
+            cls_id = int(box.cls[0])
+            conf = float(box.conf[0])
+            x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+        else:
+            cls_id = int(obb_data.cls[i])
+            conf = float(obb_data.conf[i])
+            xs = obb_data.xyxyxyxy[i][:, 0].cpu().numpy()
+            ys = obb_data.xyxyxyxy[i][:, 1].cpu().numpy()
+            x1, y1, x2, y2 = int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
         color = class_colors[cls_id % len(class_colors)]
-        x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
 
         # 类别标签
         label = f"{CLASS_NAMES[cls_id] if cls_id < len(CLASS_NAMES) else cls_id}: {conf:.2f}"
@@ -448,14 +627,21 @@ def extract_predictions_json(results, img_path: str) -> dict:
     """提取推理结果为 JSON 格式（兼容 detect/segment/obb/pose）"""
     predictions = []
     for result in results:
-        if result.boxes is None:
-            continue
-
         boxes = result.boxes
-        for i in range(len(boxes)):
-            cls_id = int(boxes.cls[i])
-            conf = float(boxes.conf[i])
-            xyxy = boxes.xyxy[i].tolist()
+        obb_data = getattr(result, "obb", None)
+        # obb 模型 result.boxes 为 None，预测数据在 result.obb
+        if boxes is None and (obb_data is None or len(obb_data) == 0):
+            continue
+        n = len(boxes) if boxes is not None else len(obb_data)
+        for i in range(n):
+            if boxes is not None:
+                cls_id = int(boxes.cls[i])
+                conf = float(boxes.conf[i])
+                xyxy = boxes.xyxy[i].tolist()
+            else:
+                cls_id = int(obb_data.cls[i])
+                conf = float(obb_data.conf[i])
+                xyxy = obb_data.xyxy[i].tolist()
             pred = {
                 "class_id": cls_id,
                 "class_name": CLASS_NAMES[cls_id] if cls_id < len(CLASS_NAMES) else f"cls{cls_id}",
@@ -492,9 +678,11 @@ def extract_predictions_json(results, img_path: str) -> dict:
 
 def run_inference(data_path: str, input_path: str, task_type: str,
                   conf: float = 0.25, iou: float = 0.45,
-                  model_path: str = None, label_dir: str = None):
+                  model_path: str = None, label_dir: str = None,
+                  json_dir: str = None):
     """
     执行推理主流程
+    json_dir: LabelMe 真值 json 目录（无 YOLO txt 时用于误差分析）
     """
     # 加载 data.yaml
     if not os.path.exists(data_path):
@@ -514,19 +702,21 @@ def run_inference(data_path: str, input_path: str, task_type: str,
 
     # 找最新模型：优先用 info.yaml 记录的 best 权重，否则自动扫描 run_out
     if model_path is None:
-        info = load_info_yaml(dataset_dir)
+        info = get_project_config(dataset_dir)
         recorded = (info.get("weights") or {}).get("best")
         if recorded and Path(recorded).exists():
             model_path = recorded
             log_info(f"Using recorded model: {model_path}")
         else:
-            model_path = find_latest_model(dataset_dir)
+            model_path = find_latest_model(
+                info.get("run_out_dir") or str(Path(dataset_dir) / "run_out")
+            )
     if not os.path.exists(model_path):
         log_error(f"Model not found: {model_path}")
         sys.exit(1)
 
-    # 输出目录
-    out_dirs = get_output_dirs(dataset_dir)
+    # 输出目录（统一放数据根目录 {DATA_ROOT}，不在训练集内）
+    out_dirs = get_output_dirs(get_project_config(dataset_dir)["data_root"])
 
     # 收集输入图片
     images = collect_input_images(input_path)
@@ -548,7 +738,7 @@ def run_inference(data_path: str, input_path: str, task_type: str,
 
     # 处理每张图
     all_errors = []
-    all_json_results = []
+    all_point_errors = []
 
     for img_path in images:
         log_info(f"Processing: {os.path.basename(img_path)}")
@@ -562,10 +752,10 @@ def run_inference(data_path: str, input_path: str, task_type: str,
             log_warn(f"Cannot read image: {img_path}")
             continue
 
-        # 可视化
+        # 可视化（jpg 省空间）
         vis_img = draw_prediction(img.copy(), results[0], task_type)
-        vis_path = os.path.join(out_dirs["vis"], os.path.basename(img_path))
-        cv2.imwrite(vis_path, vis_img)
+        vis_path = os.path.join(out_dirs["vis"], Path(img_path).stem + ".jpg")
+        cv2.imwrite(vis_path, vis_img, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
 
         # 提取 JSON 结果
         json_result = extract_predictions_json(results, img_path)
@@ -573,33 +763,35 @@ def run_inference(data_path: str, input_path: str, task_type: str,
         json_path = os.path.join(out_dirs["json"], json_name)
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(json_result, f, indent=2, ensure_ascii=False)
-        all_json_results.append(json_result)
 
         # 误差分析（如果有真值）
         if label_dir and Path(label_dir).exists():
-            gt_boxes = load_ground_truth(label_dir, Path(img_path).stem)
-            if gt_boxes:
+            gt_items = load_ground_truth(label_dir, Path(img_path).stem,
+                                         json_dir=json_dir,
+                                         task_type=task_type)
+            if gt_items:
+                img_w, img_h = img.shape[1], img.shape[0]
                 pred_boxes = []
                 if results[0].boxes is not None:
                     for box in results[0].boxes:
                         cls_id = int(box.cls[0])
-                        x1, y1, x2, y2 = box.xywh[0].tolist()
+                        cx, cy, bw, bh = box.xywh[0].tolist()
                         pred_boxes.append({
                             "class_id": cls_id,
-                            "bbox": (x1 / img.shape[1], y1 / img.shape[0],
-                                     (x2 - x1) / img.shape[1], (y2 - y1) / img.shape[0]),
+                            "bbox": (cx / img_w, cy / img_h,
+                                     bw / img_w, bh / img_h),
                         })
-                img_errors = calc_bbox_errors(gt_boxes, pred_boxes, img.shape[1], img.shape[0])
+                img_errors = calc_bbox_errors(gt_items, pred_boxes, img_w, img_h)
                 all_errors.extend(img_errors)
 
-    # 汇总 JSON
-    summary_path = os.path.join(out_dirs["json"], "_all_results.json")
-    with open(summary_path, "w", encoding="utf-8") as f:
-        json.dump(all_json_results, f, indent=2, ensure_ascii=False)
-    log_info(f"All results saved: {summary_path}")
+                # 点误差（obb 顶点 / segment 轮廓 / pose 关键点）
+                if task_type in ("obb", "segment", "pose"):
+                    pred_sets = extract_pred_points(results[0], task_type)
+                    all_point_errors.extend(
+                        calc_point_errors(gt_items, pred_sets, img_w, img_h))
 
-    # 误差报告
-    generate_error_report(all_errors, out_dirs["error"])
+    # 误差分析报告（bbox 误差 + 点误差）
+    generate_error_report(all_errors, all_point_errors, out_dirs["error"])
 
     log_info("=" * 60)
     log_info("Inference completed!")
@@ -627,7 +819,9 @@ def main():
     parser.add_argument("--iou", type=float, default=None,
                         help="IoU 阈值（默认取项目 info.yaml，否则 0.45）")
     parser.add_argument("--label_dir", type=str, default=None,
-                        help="真值 label 目录（用于误差分析）")
+                        help="真值 label 目录（YOLO txt，用于误差分析）")
+    parser.add_argument("--json_dir", type=str, default=None,
+                        help="真值 json 目录（LabelMe，无 txt 时用于误差分析，默认取项目 source_dir）")
     args = parser.parse_args()
 
     # 项目配置解析: 命令行参数 > info.yaml 记录 > config 默认值
@@ -646,8 +840,15 @@ def main():
     conf = args.conf if args.conf is not None else cfg.get("conf", 0.25)
     iou = args.iou if args.iou is not None else cfg.get("iou", 0.45)
 
+    # 真值 json 目录：显式参数 > 项目 source_dir
+    json_dir = args.json_dir
+    if json_dir is None:
+        src = cfg.get("source_dir")
+        if src and Path(src).exists():
+            json_dir = src
+
     run_inference(data_path, input_path, task_type,
-                  conf, iou, args.model, args.label_dir)
+                  conf, iou, args.model, args.label_dir, json_dir)
 
 
 if __name__ == "__main__":

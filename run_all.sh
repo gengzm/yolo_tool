@@ -26,8 +26,8 @@ INFER_INPUT="${INFER_INPUT:-$(cfg_value 'config.INFER_INPUT')}"   # None=默认�
 [ "$INFER_INPUT" = "None" ] && INFER_INPUT=""
 CONF="${CONF:-$(cfg_value 'config.CONF')}"
 IOU="${IOU:-$(cfg_value 'config.IOU')}"
-CONVERT_OUTPUT_DIR="${CONVERT_OUTPUT_DIR:-$(cfg_value 'config.DEFAULT_CONVERT_DIR')}"
-DEPLOY_DIR="${DEPLOY_DIR:-$(cfg_value 'config.DEFAULT_DEPLOY_DIR')}"
+WEIGHTS_DIR="${WEIGHTS_DIR:-$(cfg_value 'config.DEFAULT_WEIGHTS_DIR')}"   # None=交给 step5 解析({DATA_ROOT}/权重，产物即最终部署权重)
+[ "$WEIGHTS_DIR" = "None" ] && WEIGHTS_DIR=""
 DEVICE="${DEVICE:-}"
 
 DATA_YAML="${DATASET_DIR}/data.yaml"
@@ -79,18 +79,13 @@ python "${SCRIPT_DIR}/s4_inference.py" \
     --iou "$IOU" \
     $INFER_ARG
 
-# ======================== Step 5: 转换 ========================
+# ======================== Step 5: 转换（产物即最终部署权重） ========================
+CONVERT_ARG=""
+[ -n "$WEIGHTS_DIR" ] && CONVERT_ARG="--output_dir $WEIGHTS_DIR"
 python "${SCRIPT_DIR}/s5_convert.py" \
     --dataset_dir "$DATASET_DIR" \
     --data "$DATA_YAML" \
-    --output_dir "$CONVERT_OUTPUT_DIR" \
-    --imgsz "$IMGSZ"
-
-# ======================== Step 6: 拷贝权重 ========================
-python "${SCRIPT_DIR}/s6_copy_weights.py" \
-    --dataset_dir "$DATASET_DIR" \
-    --source "$CONVERT_OUTPUT_DIR" \
-    --target "$DEPLOY_DIR" \
-    --types onnx engine pt
+    --imgsz "$IMGSZ" \
+    $CONVERT_ARG
 
 echo "全部流程完成"

@@ -361,7 +361,7 @@ def main():
             config.set_class_names(names)
             log_info(f"Loaded {len(names)} class(es) from {args.yaml}")
 
-    # 未指定 dataset_dir / task_type 时，从项目 info.yaml（数据目录同级）读取
+    # 未指定 dataset_dir / task_type 时，从项目 info.yaml（数据目录内部）读取
     cfg = get_project_config(args.dataset_dir)
     if args.dataset_dir is None:
         args.dataset_dir = cfg["dataset_dir"]

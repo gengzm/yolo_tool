@@ -1,21 +1,20 @@
 #!/usr/bin/env python
 """
-Step 5: 模型转换
-- PT → ONNX 转换
+Step 5: 模型转换（产物即最终部署权重）
+- PT → ONNX 转换，输出 {DATA_ROOT}/权重/yolo_<task_type>_detector.onnx
+- 附一份 best.pt（yolo_<task_type>_detector.pt）
 - ONNX → TensorRT 转换（当前占位，需安装 TensorRT 后启用）
-- 转换结果保存到指定目录
 
 用法:
     python s5_convert.py \\
         --model ./yolo_dataset/run_out/20240101_120000/train/weights/best.pt \\
-        --output_dir ./converted_models \\
+        --output_dir ./权重 \\
         --imgsz 640 \\
         --half
 
 # 也可自动找最新模型:
     python s5_convert.py \\
-        --data ./yolo_dataset/data.yaml \\
-        --output_dir ./converted_models
+        --data ./yolo_dataset/data.yaml
 """
 import argparse
 import os
@@ -32,21 +31,19 @@ from utils import (
 )
 
 
-def pt_to_onnx(model_path: str, output_dir: str, imgsz: int = 640,
+def pt_to_onnx(model_path: str, output_dir: str, task_type: str, imgsz: int = 640,
                half: bool = False, simplify: bool = True,
                opset: int = 12) -> str:
     """
     PyTorch → ONNX 转换
+    产物重命名为 yolo_<task_type>_detector.onnx 并统一放到 output_dir
     """
     ensure_dir(output_dir)
     log_info(f"Converting {model_path} to ONNX...")
 
     model = YOLO(model_path)
 
-    stem = Path(model_path).stem
-    onnx_path = str(Path(output_dir) / f"{stem}.onnx")
-
-    # ultralytics 内置 ONNX 导出
+    # ultralytics 内置 ONNX 导出（默认导出到 .pt 同目录，文件名为 best.onnx）
     # 注意: workspace 仅 TensorRT(engine) 格式支持，onnx 传了会报
     # "argument 'workspace' is not supported for format='onnx'"
     success = model.export(
@@ -57,28 +54,29 @@ def pt_to_onnx(model_path: str, output_dir: str, imgsz: int = 640,
         opset=opset,
     )
 
-    if success and os.path.exists(onnx_path):
-        log_info(f"ONNX model saved: {onnx_path}")
-        return onnx_path
-    else:
-        log_warn(f"ONNX export returned success={success}, checking output...")
+    # 定位实际导出的 onnx 文件（优先用 export 返回值，否则回退扫描 .pt 同目录）
+    src_path = ""
+    if isinstance(success, (str, Path)) and Path(success).exists():
+        src_path = str(success)
+    if not src_path:
+        candidates = sorted(Path(model_path).parent.glob("*.onnx"))
+        if candidates:
+            src_path = str(candidates[0])
 
-        # 手动查找导出的 onnx 文件
-        weight_dir = Path(model_path).parent
-        onnx_candidates = list(weight_dir.glob("*.onnx"))
-        if onnx_candidates:
-            # 移到输出目录
-            import shutil
-            dst = str(Path(output_dir) / onnx_candidates[0].name)
-            shutil.move(str(onnx_candidates[0]), dst)
-            log_info(f"ONNX model moved to: {dst}")
-            return dst
-
-        log_error("ONNX export failed")
+    if not src_path:
+        log_error("ONNX export failed: no .onnx produced")
         return ""
 
+    # 重命名并移动到最终权重目录
+    import shutil
+    dest_path = str(Path(output_dir) / f"yolo_{task_type}_detector.onnx")
+    if os.path.abspath(src_path) != os.path.abspath(dest_path):
+        shutil.move(src_path, dest_path)
+    log_info(f"ONNX model saved: {dest_path}")
+    return dest_path
 
-def onnx_to_tensorrt(onnx_path: str, output_dir: str, imgsz: int = 640,
+
+def onnx_to_tensorrt(onnx_path: str, output_dir: str, task_type: str, imgsz: int = 640,
                      half: bool = True) -> str:
     """
     ONNX → TensorRT 转换 (占位实现)
@@ -98,10 +96,11 @@ def onnx_to_tensorrt(onnx_path: str, output_dir: str, imgsz: int = 640,
     log_warn("  1. Install TensorRT: pip install tensorrt")
     log_warn("  2. Install onnx-tensorrt: pip install onnx-tensorrt")
     log_warn("  3. Or use trtexec CLI:")
-    log_warn(f"     trtexec --onnx={onnx_path} --saveEngine={output_dir}/model.engine")
+    log_warn(f"     trtexec --onnx={onnx_path} "
+             f"--saveEngine={Path(output_dir) / f'yolo_{task_type}_detector.engine'}")
     log_warn("=" * 60)
 
-    engine_path = str(Path(output_dir) / f"{Path(onnx_path).stem}.engine")
+    engine_path = str(Path(output_dir) / f"yolo_{task_type}_detector.engine")
 
     # 尝试实际转换（如果 TensorRT 已安装）
     try:
@@ -157,10 +156,20 @@ def onnx_to_tensorrt(onnx_path: str, output_dir: str, imgsz: int = 640,
         return ""
 
 
-def convert_model(model_path: str, output_dir: str, imgsz: int = 640,
+def copy_best_pt(model_path: str, output_dir: str, task_type: str) -> str:
+    """复制 best.pt 到最终权重目录，命名为 yolo_<task_type>_detector.pt"""
+    import shutil
+    dst_path = str(Path(output_dir) / f"yolo_{task_type}_detector.pt")
+    shutil.copy2(model_path, dst_path)
+    log_info(f"best.pt saved: {dst_path}")
+    return dst_path
+
+
+def convert_model(model_path: str, output_dir: str, task_type: str, imgsz: int = 640,
                   half: bool = False):
     """
-    完整转换流程: PT → ONNX → TensorRT
+    完整转换流程: PT → ONNX（→ TensorRT），产物统一放到 output_dir，
+    命名为 yolo_<task_type>_detector.*，并附一份 best.pt（即最终部署权重）
     """
     if not os.path.exists(model_path):
         log_error(f"Model not found: {model_path}")
@@ -171,17 +180,21 @@ def convert_model(model_path: str, output_dir: str, imgsz: int = 640,
     log_info(f"Output dir: {output_dir}")
 
     # 1. PT → ONNX
-    onnx_path = pt_to_onnx(model_path, output_dir, imgsz, half)
+    onnx_path = pt_to_onnx(model_path, output_dir, task_type, imgsz, half)
     if not onnx_path:
         log_error("PT→ONNX conversion failed, stopping")
         return
 
     # 2. ONNX → TensorRT
-    engine_path = onnx_to_tensorrt(onnx_path, output_dir, imgsz, half)
+    engine_path = onnx_to_tensorrt(onnx_path, output_dir, task_type, imgsz, half)
+
+    # 3. 附一份 best.pt（部署侧可能直接加载 pt）
+    pt_path = copy_best_pt(model_path, output_dir, task_type)
 
     log_info("=" * 60)
     log_info("Conversion summary:")
-    log_info(f"  ONNX:    {onnx_path}")
+    log_info(f"  ONNX:     {onnx_path}")
+    log_info(f"  best.pt:  {pt_path}")
     log_info(f"  TensorRT: {engine_path if engine_path else 'Not generated (placeholder)'}")
     log_info("=" * 60)
 
@@ -215,7 +228,7 @@ def resolve_model_path(model_arg: str, data_arg: str, dataset_dir: str = None):
     if data_arg:
         return find_latest_model_from_data(data_arg), str(Path(data_arg).parent.resolve())
 
-    # 未显式指定：从项目 info.yaml（数据目录同级）读取权重/数据集信息
+    # 未显式指定：从项目 info.yaml（数据目录内部）读取权重/数据集信息
     ds_dir = resolve_dataset_dir(dataset_dir)
     info = load_info_yaml(ds_dir) if Path(ds_dir).exists() else {}
     if info:
@@ -247,6 +260,7 @@ def main():
     # 项目配置解析: 命令行参数 > info.yaml 记录 > config 默认值
     cfg = get_project_config(args.dataset_dir)
     imgsz = args.imgsz if args.imgsz is not None else cfg["imgsz"]
+    task_type = cfg.get("task_type") or config.TASK_TYPE
 
     # 确定模型路径（显式参数 > info.yaml 记录 > 自动查找）
     model_path, dataset_dir = resolve_model_path(args.model, args.data, args.dataset_dir)
@@ -255,18 +269,20 @@ def main():
         sys.exit(1)
     log_info(f"Using model: {model_path}")
 
-    output_dir = args.output_dir or cfg.get("convert_dir") or config.DEFAULT_CONVERT_DIR
-    onnx_path, engine_path = convert_model(model_path, output_dir, imgsz, args.half)
+    output_dir = args.output_dir or cfg.get("weights_dir") or "./权重"
+    onnx_path, engine_path = convert_model(model_path, output_dir, task_type, imgsz, args.half)
 
-    # 更新项目信息 info.yaml：记录转换后的权重与转换目录（合并保留已有字段）
+    # 更新项目信息 info.yaml：记录最终权重（清理废弃的 convert_dir/deploy_dir 旧键）
     if dataset_dir and onnx_path:
         info = load_info_yaml(dataset_dir)
         weights = dict(info.get("weights", {}))
         weights["onnx"] = onnx_path
+        weights["pt"] = str(Path(output_dir) / f"yolo_{task_type}_detector.pt")
         if engine_path:
             weights["engine"] = engine_path
-        update_info_yaml(dataset_dir, weights=weights,
-                         convert_dir=str(Path(output_dir).resolve()))
+        update_info_yaml(dataset_dir, remove_keys=["convert_dir", "deploy_dir"],
+                         weights=weights,
+                         weights_dir=str(Path(output_dir).resolve()))
 
 
 if __name__ == "__main__":
