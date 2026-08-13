@@ -24,7 +24,7 @@ torchvision>=0.17.0,<0.20          # 与 torch 2.2~2.4 对应
 numpy>=1.24,<2.0                   # 适配约束 1：必须 1.x
 opencv-python>=4.8,<4.11           # 适配约束 2：4.10.x 是兼容 numpy 1.x 的最后主版本
 PyYAML>=6.0
-matplotlib>=3.7                    # 推理可视化用（Agg 后端）
+matplotlib>=3.7                    # 推理可视化 + 误差分析图表（Agg 后端）
 Pillow>=10.0
 
 # ---- ONNX 导出（ultralytics export 依赖） ----

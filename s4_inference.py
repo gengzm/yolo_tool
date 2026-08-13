@@ -33,11 +33,15 @@ import argparse
 import glob
 import json
 import os
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
 
 import cv2
+import matplotlib
+matplotlib.use("Agg")  # 无 GUI 环境绘图
+import matplotlib.pyplot as plt
 import numpy as np
 import yaml
 from ultralytics import YOLO
@@ -209,14 +213,19 @@ def load_ground_truth(label_dir: str, image_stem: str,
 def calc_bbox_errors(gt_boxes, pred_boxes, img_w: int, img_h: int) -> list:
     """
     计算 bbox 误差：中心点偏移、宽高误差 (像素)
-    使用简单的贪心匹配
+    同类别贪心匹配：每个 GT 只与同 class_id 的预测匹配；
+    该类未检出时跳过，避免跨类别误匹配产生假大误差。
     """
     errors = []
     if not gt_boxes or not pred_boxes:
         return errors
 
-    # 简单贪心匹配：每个 GT 匹配最近的预测
+    # 同类别贪心匹配：每个 GT 只匹配同 class_id 的预测
     for gt in gt_boxes:
+        pool = [p for p in pred_boxes if p["class_id"] == gt["class_id"]]
+        if not pool:
+            continue  # 该类未检出，跳过
+
         gt_cx, gt_cy, gt_w, gt_h = gt["bbox"]
         gt_cx_px = gt_cx * img_w
         gt_cy_px = gt_cy * img_h
@@ -225,7 +234,7 @@ def calc_bbox_errors(gt_boxes, pred_boxes, img_w: int, img_h: int) -> list:
 
         best_dist = float("inf")
         best_pred = None
-        for pred in pred_boxes:
+        for pred in pool:
             pred_cx, pred_cy, pred_w, pred_h = pred["bbox"]
             # 中心点距离
             dist = np.sqrt((gt_cx_px - pred_cx * img_w)**2 +
@@ -298,24 +307,46 @@ def _calc_iou(box1: tuple, box2: tuple) -> float:
     return inter / union if union > 0 else 0
 
 
+def _bbox_corners(cx, cy, w, h, class_id=None):
+    """bbox (cx,cy,w,h) 转 4 角点，可选带 class_id"""
+    x1, y1 = cx - w / 2, cy - h / 2
+    x2, y2 = cx + w / 2, cy + h / 2
+    pts = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
+    if class_id is not None:
+        return [(px, py, class_id) for px, py in pts]
+    return pts
+
+
 def extract_pred_points(result, task_type: str) -> list:
     """
-    提取预测实例的点集（像素坐标）
-    obb: 4 顶点；segment: 轮廓点；pose: 可见关键点
-    返回: [[(x, y), ...], ...] 每个实例一个点集
+    提取预测实例的点集（像素坐标），每个点带 class_id
+    detect: bbox 4 角点；obb: 4 顶点；segment: 轮廓点；pose: 可见关键点
+    返回: [[(x, y, class_id), ...], ...] 每个实例一个点集
     """
     sets = []
     if result.boxes is None and (task_type != "obb" or getattr(result, "obb", None) is None):
         return sets
+    if task_type == "detect" and result.boxes is not None:
+        cls_ids = result.boxes.cls.cpu().numpy()
+        for i, (cx, cy, w, h) in enumerate(result.boxes.xywh.cpu().numpy()):
+            sets.append(_bbox_corners(cx, cy, w, h, int(cls_ids[i])))
+        return sets
     if task_type == "obb" and result.obb is not None:
-        for pts in result.obb.xyxyxyxy:
-            sets.append(pts.cpu().numpy().tolist())
+        cls_ids = result.obb.cls.cpu().numpy()
+        for i, pts in enumerate(result.obb.xyxyxyxy):
+            cid = int(cls_ids[i])
+            sets.append([(float(p[0]), float(p[1]), cid)
+                         for p in pts.cpu().numpy()])
     elif task_type == "segment" and result.masks is not None:
-        for pts in result.masks.xy:
-            sets.append(pts.tolist())
+        cls_ids = result.boxes.cls.cpu().numpy()
+        for i, pts in enumerate(result.masks.xy):
+            cid = int(cls_ids[i])
+            sets.append([(float(p[0]), float(p[1]), cid) for p in pts])
     elif task_type == "pose" and result.keypoints is not None:
-        for kpts in result.keypoints.data:
-            pts = [(float(x), float(y))
+        cls_ids = result.boxes.cls.cpu().numpy()
+        for i, kpts in enumerate(result.keypoints.data):
+            cid = int(cls_ids[i])
+            pts = [(float(x), float(y), cid)
                    for x, y, c in kpts.cpu().numpy() if c > 0.5]
             if pts:
                 sets.append(pts)
@@ -325,23 +356,43 @@ def extract_pred_points(result, task_type: str) -> list:
 def calc_point_errors(gt_items: list, pred_point_sets: list,
                       img_w: int, img_h: int) -> list:
     """
-    计算点误差：真值每个点匹配最近的预测点（贪心），返回像素距离列表
+    计算点误差：真值每个点匹配最近且同类别（class_id）的预测点（贪心）。
     gt_items: load_ground_truth 结果（points 为归一化坐标）
-    pred_point_sets: extract_pred_points 结果（像素坐标）
+    pred_point_sets: extract_pred_points 结果（像素坐标，点带 class_id）
+    某类别目标未检出（无同类别预测点）时跳过，
+    避免跨类别误匹配产生假大误差。
+    返回: [{"class_id": int, "class_name": str, "error_px": float}, ...]
     """
     errors = []
-    all_pred = [(float(x), float(y)) for pts in pred_point_sets for (x, y) in pts]
-    if not all_pred:
+    # 按类别组织预测点
+    pred_by_cls = {}
+    for pts in pred_point_sets:
+        for (x, y, cid) in pts:
+            pred_by_cls.setdefault(int(cid), []).append((float(x), float(y)))
+    if not pred_by_cls:
         return errors
     for gt in gt_items:
         gt_pts = gt.get("points")
         if not gt_pts:
+            # detect 等无显式点集时，用 bbox 4 角点做点对比较
+            if gt.get("bbox"):
+                gt_pts = _bbox_corners(*gt["bbox"])
+        if not gt_pts:
             continue
+        cid = gt["class_id"]
+        cls_name = CLASS_NAMES[cid] if cid < len(CLASS_NAMES) else f"cls{cid}"
+        pool = pred_by_cls.get(cid)
+        if not pool:
+            continue  # 该类未检出，不计入误差（避免误匹配）
         for gx_n, gy_n in gt_pts:
             gx, gy = gx_n * img_w, gy_n * img_h
-            bx, by = min(all_pred,
+            bx, by = min(pool,
                          key=lambda p: (p[0] - gx) ** 2 + (p[1] - gy) ** 2)
-            errors.append(float(np.hypot(bx - gx, by - gy)))
+            errors.append({
+                "class_id": cid,
+                "class_name": cls_name,
+                "error_px": float(np.hypot(bx - gx, by - gy)),
+            })
     return errors
 
 
@@ -372,12 +423,8 @@ def _plot_hist_with_stats(ax, data, title, xlabel, color, stat):
     ax.legend()
 
 
-def _plot_stats_bar(stats: dict, err_dir: str):
+def _plot_stats_bar(stats: dict, err_dir: str, task_type: str = "detect"):
     """Mean / Median / Std 汇总条形图（仅像素类误差指标）"""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
     keys = [k for k in ("center_error", "width_error", "height_error",
                         "point_error") if k in stats]
     if not keys:
@@ -398,7 +445,7 @@ def _plot_stats_bar(stats: dict, err_dir: str):
     ax.set_xticks(x)
     ax.set_xticklabels(names)
     ax.set_ylabel("pixels (px)")
-    ax.set_title("Error Metrics: Mean / Median / Std (px)")
+    ax.set_title(f"{task_type} - Error Metrics: Mean / Median / Std (px)")
     ax.legend()
     for xi, (m, md, s) in enumerate(zip(means, medians, stds)):
         ax.text(xi - width, m, f"{m:.1f}", ha="center", va="bottom", fontsize=8)
@@ -411,32 +458,48 @@ def _plot_stats_bar(stats: dict, err_dir: str):
     log_info(f"Error stats bar chart saved: {bar_path}")
 
 
-def generate_error_report(all_errors: list, point_errors: list, err_dir: str):
+def _plot_class_error(task_type: str, cname: str,
+                      grp_all: list, grp_pts: list, save_path: str):
     """
-    生成误差分析报告（JSON 统计 + 图表）
-    - error_stats.json     各指标 Mean/Median/Std/Min/Max
-    - error_analysis.png   误差分布直方图（含点误差，当有点真值时）
-    - error_stats_bar.png  Mean / Median / Std 汇总条形图
+    每个类别一张图：单个 ax 占满整张画布。
+    点误差直方图：横轴 = 误差(px)，纵轴 = 点数量，
+    Mean / Median 用虚线在图中标出。
+    detect 用 bbox 4 角点，obb 用 4 顶点，segment 用轮廓点，pose 用关键点。
     """
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    if not all_errors and not point_errors:
-        log_warn("No errors to report (no ground truth available)")
+    if not grp_pts:
         return
+    vals = np.asarray([p["error_px"] for p in grp_pts], dtype=float)
+    fig, ax = plt.subplots(figsize=(10, 6.5))
+    ax.hist(vals, bins=30, color="steelblue", edgecolor="white", alpha=0.85)
+    ax.axvline(vals.mean(), color="red", linestyle="--", linewidth=1.8,
+               label=f"Mean: {vals.mean():.2f}px")
+    ax.axvline(np.median(vals), color="green", linestyle="--", linewidth=1.8,
+               label=f"Median: {np.median(vals):.2f}px")
+    ax.set_xlabel("Error (pixels)")
+    ax.set_ylabel("Point Count")
+    ax.set_title(f"{task_type} - {cname} Point Error\n"
+                 f"Mean={vals.mean():.2f}px, Median={np.median(vals):.2f}px, "
+                 f"Std={vals.std():.2f}px (n={len(vals)})")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    log_info(f"Error chart saved: {save_path}")
 
-    ensure_dir(err_dir)
 
-    # 汇总统计
+def _build_class_stats(grp_all: list, grp_pts: list) -> tuple:
+    """
+    由一组误差数据计算 stats dict 与 plot_specs 列表
+    返回: (stats, plot_specs)
+    """
     stats = {}
     plot_specs = []
-    if all_errors:
-        center_errors = [e["center_error_px"] for e in all_errors]
-        width_errors = [e["width_error_px"] for e in all_errors]
-        height_errors = [e["height_error_px"] for e in all_errors]
-        ious = [e["iou"] for e in all_errors]
-        stats["total_comparisons"] = len(all_errors)
+    if grp_all:
+        center_errors = [e["center_error_px"] for e in grp_all]
+        width_errors = [e["width_error_px"] for e in grp_all]
+        height_errors = [e["height_error_px"] for e in grp_all]
+        ious = [e["iou"] for e in grp_all]
+        stats["total_comparisons"] = len(grp_all)
         stats["center_error"] = _summarize(center_errors)
         stats["width_error"] = _summarize(width_errors)
         stats["height_error"] = _summarize(height_errors)
@@ -450,10 +513,46 @@ def generate_error_report(all_errors: list, point_errors: list, err_dir: str):
              "Height Error (pixels)", "mediumseagreen"),
             ("iou", ious, "IoU Distribution", "IoU", "mediumpurple"),
         ]
-    if point_errors:
-        stats["point_error"] = _summarize(point_errors)
-        plot_specs.append(("point_error", point_errors, "Point Error",
+    if grp_pts:
+        pt_vals = [p["error_px"] for p in grp_pts]
+        stats["point_error"] = _summarize(pt_vals)
+        plot_specs.append(("point_error", pt_vals, "Point Error",
                            "Point Error (pixels)", "darkorange"))
+    return stats, plot_specs
+
+
+def generate_error_report(all_errors: list, point_errors: list,
+                          err_dir: str, task_type: str = "detect"):
+    """
+    生成误差分析报告（JSON 统计 + 图表，每个类别一张图）
+    - error_stats.json         各指标 Mean/Median/Std/Min/Max（整体 + 按类别 per_class）
+    - error_analysis.png       全类别总览误差分布直方图
+    - error_analysis_{类别}.png 每个类别一张误差分布直方图
+    - error_stats_bar.png      Mean / Median / Std 汇总条形图
+    每张图 title 均包含任务类型 + 类别名称。
+    """
+    if not all_errors and not point_errors:
+        log_warn("No errors to report (no ground truth available)")
+        return
+
+    ensure_dir(err_dir)
+
+    # 按类别分组：class_name -> {"all_errors": [...], "point_errors": [...]}
+    classes = {}
+    for e in all_errors:
+        classes.setdefault(e["class_name"],
+                           {"all_errors": [], "point_errors": []})["all_errors"].append(e)
+    for p in point_errors:
+        classes.setdefault(p["class_name"],
+                           {"all_errors": [], "point_errors": []})["point_errors"].append(p)
+
+    # 整体统计 + 图表规格
+    overall_stats, overall_specs = _build_class_stats(all_errors, point_errors)
+    stats = dict(overall_stats)
+    stats["per_class"] = {
+        cname: _build_class_stats(grp["all_errors"], grp["point_errors"])[0]
+        for cname, grp in classes.items()
+    }
 
     # 保存统计 JSON
     stats_path = os.path.join(err_dir, "error_stats.json")
@@ -461,30 +560,25 @@ def generate_error_report(all_errors: list, point_errors: list, err_dir: str):
         json.dump(stats, f, indent=2, ensure_ascii=False)
     log_info(f"Error stats saved: {stats_path}")
 
-    # 绘制误差分布直方图（有点误差时扩为 2x3）
-    has_point = "point_error" in stats
-    nrows, ncols = (2, 3) if has_point else (2, 2)
-    fig, axes = plt.subplots(nrows, ncols, figsize=(18 if has_point else 14, 12))
-    fig.suptitle("Prediction vs Ground Truth Error Analysis", fontsize=14)
-    axes = axes.flatten()
+    # 全类别总览图（一张图、一个占满画布的图表）
+    if overall_specs:
+        _plot_class_error(task_type, "All Classes", all_errors, point_errors,
+                          os.path.join(err_dir, "error_analysis.png"))
 
-    for ax, (key, data, title, xlabel, color) in zip(axes, plot_specs):
-        _plot_hist_with_stats(ax, data, title, xlabel, color, stats[key])
-    for ax in axes[len(plot_specs):]:
-        ax.axis("off")
+    # 每个类别一张图（title 含任务类型 + 类别名称）
+    for cname, grp in classes.items():
+        if not grp["all_errors"] and not grp["point_errors"]:
+            continue
+        safe_name = re.sub(r'[^\w\u4e00-\u9fff-]+', '_', cname)
+        _plot_class_error(task_type, cname, grp["all_errors"], grp["point_errors"],
+                          os.path.join(err_dir, f"error_analysis_{safe_name}.png"))
 
-    plt.tight_layout()
-    chart_path = os.path.join(err_dir, "error_analysis.png")
-    fig.savefig(chart_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    log_info(f"Error chart saved: {chart_path}")
+    # 汇总条形图（整体）
+    _plot_stats_bar(overall_stats, err_dir, task_type)
 
-    # 汇总条形图（Mean / Median / Std）
-    _plot_stats_bar(stats, err_dir)
-
-    # 打印统计摘要
+    # 打印统计摘要（整体 + 按类别）
     log_info("=" * 60)
-    log_info("Error Analysis Summary:")
+    log_info(f"Error Analysis Summary ({task_type}):")
     names = {"center_error": "Center Error", "width_error": "Width Error",
              "height_error": "Height Error", "iou": "IoU",
              "point_error": "Point Error"}
@@ -499,6 +593,14 @@ def generate_error_report(all_errors: list, point_errors: list, err_dir: str):
         else:
             log_info(f"  {names[key]:<14} - Mean: {s['mean']:.2f}px, "
                      f"Median: {s['median']:.2f}px, STD: {s['std']:.2f}px")
+    for cname, gstats in stats["per_class"].items():
+        parts = []
+        for key in ("center_error", "point_error"):
+            if key in gstats:
+                s = gstats[key]
+                parts.append(f"{names[key]} mean={s['mean']:.2f}px "
+                             f"median={s['median']:.2f}px (n={s['count']})")
+        log_info(f"  [{cname}] " + "; ".join(parts) if parts else f"  [{cname}]")
     log_info("=" * 60)
 
 
@@ -771,7 +873,9 @@ def run_inference(data_path: str, input_path: str, task_type: str,
                                          task_type=task_type)
             if gt_items:
                 img_w, img_h = img.shape[1], img.shape[0]
+                # OBB 模型 result.boxes 为 None，预测框从 result.obb 顶点取
                 pred_boxes = []
+                obb_data = getattr(results[0], "obb", None)
                 if results[0].boxes is not None:
                     for box in results[0].boxes:
                         cls_id = int(box.cls[0])
@@ -781,17 +885,28 @@ def run_inference(data_path: str, input_path: str, task_type: str,
                             "bbox": (cx / img_w, cy / img_h,
                                      bw / img_w, bh / img_h),
                         })
+                elif obb_data is not None and len(obb_data):
+                    cls_ids = obb_data.cls.cpu().numpy()
+                    for i, xyxyxyxy in enumerate(obb_data.xyxyxyxy):
+                        pts = xyxyxyxy.cpu().numpy()
+                        xs, ys = pts[:, 0], pts[:, 1]
+                        pred_boxes.append({
+                            "class_id": int(cls_ids[i]),
+                            "bbox": (xs.mean() / img_w, ys.mean() / img_h,
+                                     (xs.max() - xs.min()) / img_w,
+                                     (ys.max() - ys.min()) / img_h),
+                        })
                 img_errors = calc_bbox_errors(gt_items, pred_boxes, img_w, img_h)
                 all_errors.extend(img_errors)
 
-                # 点误差（obb 顶点 / segment 轮廓 / pose 关键点）
-                if task_type in ("obb", "segment", "pose"):
-                    pred_sets = extract_pred_points(results[0], task_type)
-                    all_point_errors.extend(
-                        calc_point_errors(gt_items, pred_sets, img_w, img_h))
+                # 点误差（detect bbox 角点 / obb 顶点 / segment 轮廓 / pose 关键点）
+                pred_sets = extract_pred_points(results[0], task_type)
+                all_point_errors.extend(
+                    calc_point_errors(gt_items, pred_sets, img_w, img_h))
 
-    # 误差分析报告（bbox 误差 + 点误差）
-    generate_error_report(all_errors, all_point_errors, out_dirs["error"])
+    # 误差分析报告（bbox 误差 + 点误差，每个类别一张图）
+    generate_error_report(all_errors, all_point_errors,
+                          out_dirs["error"], task_type)
 
     log_info("=" * 60)
     log_info("Inference completed!")
