@@ -7,7 +7,7 @@ Step 1: 数据准备
 - 生成 data.yaml 配置文件
 
 用法:
-    python s1_prepare_data.py \\
+    yolo-tool s1 \\
         --source_dir ./raw_data \\
         --dataset_dir ./yolo_dataset \\
         --task_type detect \\
@@ -30,11 +30,11 @@ from pathlib import Path
 
 import numpy as np
 
-import config
-from config import (
+from ..core import config
+from ..core.config import (
     CLASS_NAMES, CLASS_TO_IDX, IMAGE_EXTENSIONS, LABELME_SUFFIX,
 )
-from utils import (
+from ..core.utils import (
     find_image_json_pairs, load_labelme_json, get_class_id,
     collect_class_names_from_json, points_to_yolo_bbox,
     normalize_points, split_dataset, copy_image_and_label,

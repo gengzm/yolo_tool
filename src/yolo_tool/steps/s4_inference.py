@@ -16,7 +16,7 @@ Step 4: 推理
     └── 误差分析/
 
 用法:
-    python s4_inference.py \\
+    yolo-tool s4 \\
         --data ./yolo_dataset/data.yaml \\
         --input ./test_images \\
         --task_type detect \\
@@ -24,7 +24,7 @@ Step 4: 推理
         --iou 0.45
 
 # 也可以直接用单张图片：
-    python s4_inference.py \\
+    yolo-tool s4 \\
         --data ./yolo_dataset/data.yaml \\
         --input ./test_images/img001.jpg \\
         --task_type segment
@@ -46,12 +46,12 @@ import numpy as np
 import yaml
 from ultralytics import YOLO
 
-from config import CLASS_NAMES, CLASS_COLORS_BGR, POINT_COLORS_BGR, IMAGE_EXTENSIONS
-from utils import (
+from ..core import config
+from ..core.config import CLASS_NAMES, CLASS_COLORS_BGR, POINT_COLORS_BGR, IMAGE_EXTENSIONS
+from ..core.utils import (
     ensure_dir, log_info, log_warn, log_error,
     get_project_config, load_labelme_json, normalize_points,
 )
-import config
 
 
 def _training_complete(train_dir: Path) -> bool:

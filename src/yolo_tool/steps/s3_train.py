@@ -7,7 +7,7 @@ Step 3: YOLO 训练
 - 训练结果输出到数据根目录 {DATA_ROOT}/run_out
 
 用法:
-    python s3_train.py \\
+    yolo-tool s3 \\
         --data ./yolo_dataset/data.yaml \\
         --task_type detect \\
         --model yolo26n.pt \\
@@ -24,9 +24,11 @@ from pathlib import Path
 import yaml
 from ultralytics import YOLO
 
-import config
-from config import CLASS_TRAIN_OVERRIDE, CLASS_NAMES, EPOCHS, BATCH, IMGSZ, task_model_name
-from utils import (
+from ..core import config
+from ..core.config import (
+    CLASS_TRAIN_OVERRIDE, CLASS_NAMES, EPOCHS, BATCH, IMGSZ, task_model_name,
+)
+from ..core.utils import (
     ensure_dir, log_info, log_warn, log_error,
     load_info_yaml, update_info_yaml, get_project_config, resolve_model_path,
 )

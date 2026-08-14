@@ -19,8 +19,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-import config as C
-from utils import (
+from ..core import config as C
+from ..core.utils import (
     collect_class_names_from_json, load_info_yaml, resolve_model_path,
     update_info_yaml,
 )

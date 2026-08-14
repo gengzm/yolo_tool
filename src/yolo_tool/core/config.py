@@ -156,7 +156,10 @@ POINT_COLORS_BGR = [
 # ======================== 预训练模型 ========================
 # 本地模型目录（放入 yolo26n-*.pt / yolo26s-*.pt 等文件，训练时自动优先使用）
 # 目录不存在或找不到对应文件时，回退 ultralytics 在线下载
-MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+MODELS_DIR = os.environ.get(
+    "YOLO_MODELS_DIR",
+    os.path.join(Path(__file__).resolve().parents[3], "models"),
+)
 
 # 模型规格: n(轻量) / s(标准) / m / l / x，切换规格只需改这里
 MODEL_SIZE = "n"

@@ -4,16 +4,16 @@ Step 0: 收集标签信息
 扫描源目录中所有 LabelMe JSON，统计各类别出现次数，展示类别清单。
 
 用法:
-    python s0_collect_labels.py                # 使用 config.py 的源目录
-    python s0_collect_labels.py --source_dir /path/to/dir
+    yolo-tool s0                               # 使用 config.py 的源目录
+    yolo-tool s0 --source_dir /path/to/dir
 """
 import argparse
 import sys
 from collections import Counter
 from pathlib import Path
 
-import config
-from utils import load_labelme_json, log_info, log_warn, log_error, get_project_config
+from ..core import config
+from ..core.utils import load_labelme_json, log_info, log_warn, log_error, get_project_config
 
 
 def collect_label_stats(source_dir: str):

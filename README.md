@@ -1,174 +1,123 @@
-# YOLO 标注转换与训练工具链
+# YOLO 工具箱（YOLO Tool）
 
-将 LabelMe 标注（JSON）一键转换为 YOLO 数据集，并完成 **可视化 → 训练 → 推理 → ONNX 转换 → 权重部署** 的全流程。支持 `detect` / `segment` / `obb` / `pose` 四种任务。
+基于 Ultralytics YOLO（YOLO26）的目标检测/分割/OBB/姿态估计 数据处理与训练工具链。
 
-## 特性
+提供两条使用路径：
+- **图形界面（推荐）**：PySide6 工作台，配置自动保存、可视化操作全流程。
+- **命令行**：`yolo-tool s0 .. s5` 单步执行，`run_all.sh` 一键串联。
 
-- **LabelMe → YOLO 转换**：自动映射 shape_type 到 detect/segment/obb/pose 格式
-- **项目档案（info.yaml）**：每个数据集目录自带一份档案，记录该项目的参数与运行结果，切换项目即切换目录，参数自动导入
-- **参数优先级**：命令行参数 > 项目 info.yaml > config.py 默认值
-- **零参数可运行**：每个 step 均可裸跑（`python s1_prepare_data.py`），默认值自动从 config / info.yaml 解析
-- **一键串联**：`run_all.sh` 依次执行全部 6 个步骤
+---
 
-## 目录结构
-
-```
-yolo_tool/
-├── config.py            # 全局默认配置（唯一需要改参数的地方）
-├── utils.py             # 公共工具：info.yaml 读写、项目配置解析、转换函数
-├── requirements.txt     # 依赖清单
-├── run_all.sh           # 一键串联 s0~s5
-├── s0_collect_labels.py # 扫描 LabelMe JSON，统计类别
-├── s1_prepare_data.py   # 生成 YOLO 数据集 + 切分 + data.yaml
-├── s2_visualize.py      # 标注可视化
-├── s3_train.py          # YOLO 训练
-├── s4_inference.py      # 推理（可视化 + JSON + 误差分析）
-└── s5_convert.py        # 转 ONNX（产物即最终部署权重，含 best.pt）
-```
-
-## 环境安装
+## 1. 安装
 
 ```bash
-# 创建环境（示例）
-conda create -n yolo python=3.11 -y
-conda activate yolo
-
-# 安装依赖（清华源）
-pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install -e . -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
-> 版本适配说明：仅 `ultralytics` 锁定主版本（8.4+ 才支持 YOLO26）。本机 torch 2.2.x 只支持 numpy 1.x，因此 `numpy < 2.0`、`opencv-python < 4.11`、`onnxruntime < 2.0` 三条约束不可放宽；升级 torch 时需同步调整。
+> 以可编辑方式安装到当前 Python 环境，依赖由 `pyproject.toml` 统一管理，安装后获得 `yolo-tool` 命令。
+> `run_all.sh` 内部仍会按 `requirements.txt` 检查/补齐依赖。
+>
+> 版本约束（见 `requirements.txt` 内注释）：
+> `numpy<2.0`、`opencv-python<4.11`、`onnxruntime<2.0`、`torch<2.5` —— 本机 torch 2.2.x 只支持 numpy 1.x，四条约束必须同时保留，升版需同步放宽。
 
-## 快速开始
+---
 
-### 方式一：一键全流程（推荐）
+## 2. 启动
+
+### 图形界面
 
 ```bash
-bash run_all.sh                # 使用 config.py 中的默认任务类型与路径
-bash run_all.sh obb            # 或显式指定任务类型
+yolo-tool          # 等价于 python -m yolo_tool
 ```
 
-> 环境变量可临时覆盖参数，如 `DATASET_DIR=... EPOCHS=100 bash run_all.sh`
+工作台左侧为步骤页：`设置` → `准备数据(s1)` → `可视化(s2)` → `训练(s3)` → `推理(s4)` → `转换导出(s5)`，右上为全局运行日志。
 
-### 方式二：分步执行
+- **配置自动保存**：所有可编辑字段改动即保存（防抖 300ms），无需手动保存；「数据根目录」失焦后自动同步派生目录。
+- **数据根目录**：唯一需要手填的根路径，其余目录（数据集、权重、输出等）由它按名称自动派生，名称框与路径框联动显示（只读灰框）。
+- **训练/验证比例**：训练集、验证集比例自动互补，总和恒为 1；验证集必须非空（训练评估与 `best.pt` 生成依赖），下限 0.05。
+- **s5 TensorRT 导出**：未检测到 NVIDIA GPU（CUDA）或 TensorRT 时，相关两项自动灰显。
+
+### 命令行单步
 
 ```bash
-# 1. 查看源目录的标签类别
-python s0_collect_labels.py --source_dir /path/to/raw
-
-# 2. 生成 YOLO 数据集
-python s1_prepare_data.py --source_dir /path/to/raw --dataset_dir /path/to/yolo_dataset --task_type obb
-
-# 3. 可视化检查标注
-python s2_visualize.py --dataset_dir /path/to/yolo_dataset --split all
-
-# 4. 训练
-python s3_train.py --dataset_dir /path/to/yolo_dataset --epochs 200 --batch 16
-
-# 5. 推理（默认对验证集）
-python s4_inference.py --dataset_dir /path/to/yolo_dataset
-
-# 6. 转换（产物即最终部署权重，输出到 {DATA_ROOT}/权重）
-python s5_convert.py --dataset_dir /path/to/yolo_dataset
+yolo-tool s0 .. s5 [参数]      # 等价于 python -m yolo_tool.steps.sX ...
+yolo-tool s3 --epochs 50 --batch 8
 ```
 
-所有步骤都可省略参数裸跑；多项目场景只需传 `--dataset_dir` 切换。
+### 一键流程
 
-## 配置体系
-
-### 1. config.py（全局默认值，随代码仓库）
-
-```python
-DEFAULT_DATA_ROOT = "/path/to/data_root"       # 数据根目录：所有数据资产统一放这里
-TASK_TYPE = "obb"                              # 默认任务类型
-DEFAULT_SOURCE_DIR = f"{DATA_ROOT}/原始数据"    # 原始图片 + LabelMe JSON
-DEFAULT_DATASET_DIR = f"{DATA_ROOT}/训练集_OBB" # 生成的 YOLO 数据集
-DEFAULT_VISUALIZE_DIR = None                   # None = 自动 = {DATA_ROOT}/可视化标注
-DEFAULT_RUN_OUT_DIR = None                     # None = 自动 = {DATA_ROOT}/run_out
-DEFAULT_WEIGHTS_DIR = None                     # None = 自动 = {DATA_ROOT}/权重（最终部署权重）
-EPOCHS = 200
-BATCH = 16
-IMGSZ = 640
-INFER_INPUT = None                             # None = 推理默认用验证集
-CONF = 0.25                                    # 推理置信度
-IOU = 0.45                                     # 推理 IoU
-CLASS_NAMES = [...]                            # 类别列表（与源标注一致）
+```bash
+bash run_all.sh [task_type]     # detect / segment / obb / pose，默认取 config.py
 ```
 
-所有数据产物（原始数据、数据集、可视化、最终权重）统一归于 `DEFAULT_DATA_ROOT` 下，代码目录只放代码。
+等价于依次执行 s0 → s5，所有参数默认取自 `config.py`，可用环境变量临时覆盖（见脚本内注释）。
 
-### 2. info.yaml（项目档案，随数据集目录）
+---
 
-每个数据集目录下自动生成 `info.yaml`，记录该项目运行结果与参数：
-
-```yaml
-dataset_dir: /path/to/yolo_dataset   # 定位目录
-task_type: obb
-source_dir: /path/to/raw
-data_yaml: /path/to/yolo_dataset/data.yaml
-train_ratio: 0.8
-val_ratio: 0.2
-epochs: 200
-batch: 16
-imgsz: 640
-weights: /path/to/data_root/run_out/20260813_022239/train/weights/best.pt
-weights_dir: {DATA_ROOT}/权重     # 最终部署权重（yolo_<task>_detector.onnx / .engine / .pt）
-```
-
-运行各 step 时若省略参数，会自动从该项目档案恢复；界面/脚本切换项目 = 切换 `--dataset_dir`。
-
-### 3. 优先级
+## 3. 目录结构
 
 ```
-命令行参数  >  项目 info.yaml  >  config.py 默认值
+yolo_tool/                    项目根
+├── src/
+│   └── yolo_tool/            包（安装后为 yolo-tool 命令）
+│       ├── __init__.py       版本信息
+│       ├── __main__.py       python -m yolo_tool 入口
+│       ├── cli.py            yolo-tool 命令：GUI / s0~s5 子命令分发
+│       ├── app/              GUI 工作台
+│       │   ├── main.py       主窗口、步骤页装配、保存流程
+│       │   ├── tabs.py       各步骤页（设置 / s1~s5）
+│       │   ├── widgets.py    基础控件（表单、路径框、预览等）
+│       │   ├── step_runner.py 后台执行步骤（python -m 子进程）
+│       │   └── theme.py      全局 QSS 主题
+│       ├── core/             共享配置与公共函数
+│       │   ├── config.py     全局配置（目录、训练、转换参数）
+│       │   └── utils.py      路径派生、配置读写、数据集拆分等
+│       └── steps/            s0~s5 步骤脚本（python -m 运行）
+│           ├── s0_collect_labels.py   收集源目录标签信息（类别/图片数）
+│           ├── s1_prepare_data.py     数据准备：拆分训练/验证集 + data.yaml
+│           ├── s2_visualize.py        可视化标注（结果图 + 可播放动画）
+│           ├── s3_train.py            训练（YOLO26，输出 best.pt / last.pt）
+│           ├── s4_inference.py        推理（默认验证集，可指定 --input）
+│           └── s5_convert.py          导出 ONNX / TensorRT(.engine)
+├── pyproject.toml           打包配置与依赖清单
+├── run_all.sh               一键串联全部步骤
+├── requirements.txt         run_all.sh 依赖安装清单（与 pyproject 一致）
+├── README.md
+│
+├── models/                  本地预训练权重（yolo26n-*.pt 等，训练时优先使用，缺则在线下载）
+├── converted_models/        早期转换产物目录（现产物统一写入 {DATA_ROOT}/权重，可忽略）
+└── yolo26n-obb.pt           OBB 预训练权重样例（位于项目根目录）
 ```
 
-## 各 Step 详解
+---
 
-| Step | 脚本 | 功能 | 关键参数 |
-|------|------|------|----------|
-| 0 | `s0_collect_labels.py` | 扫描 LabelMe JSON，统计各类别次数 | `--source_dir` |
-| 1 | `s1_prepare_data.py` | 转 YOLO 格式、切分 train/val/test、生成 data.yaml | `--source_dir` `--task_type` `--train_ratio` `--val_ratio` |
-| 2 | `s2_visualize.py` | 标注可视化到"可视化标注"目录 | `--split`（train/val/all） |
-| 3 | `s3_train.py` | YOLO 训练，输出到 `{DATA_ROOT}/run_out/{时间戳}/` | `--epochs` `--batch` `--imgsz` `--device` |
-| 4 | `s4_inference.py` | 推理 + 可视化 + JSON + 误差分析（bbox/点误差，Mean/Median/Std 图表） | `--input` `--conf` `--iou` `--model` `--json_dir` |
-| 5 | `s5_convert.py` | 转 ONNX + 附 best.pt（产物即最终权重）；TensorRT 需 NVIDIA GPU | `--output_dir` `--imgsz` `--half` |
+## 4. 各步骤说明
 
-### LabelMe shape_type 映射（s1）
+| 步骤 | 模块 | 作用 |
+| ---- | ---- | ---- |
+| s0 | `s0_collect_labels` | 扫描源目录，收集类别与样本统计，供 s1 标签配置 |
+| s1 | `s1_prepare_data` | 按训练/验证比例拆分数据，生成 `data.yaml`；标签 ID 在 GUI 中可配置（参与训练 0..n-1 独占，跳过留空） |
+| s2 | `s2_visualize` | 可视化标注与拆分结果（`--split train/val/all`） |
+| s3 | `s3_train` | 训练 YOLO26，输出 `best.pt` / `last.pt`（`--epochs --batch --imgsz --device`） |
+| s4 | `s4_inference` | 推理（`--conf --iou`，`--input` 缺省用验证集） |
+| s5 | `s5_convert` | 导出 ONNX / TensorRT（`--imgsz --output_name`，`--output_dir` 缺省为最终部署权重目录） |
 
-| shape_type | detect | segment | obb | pose |
-|-----------|--------|---------|-----|------|
-| rectangle | bbox | 多边形近似 | bbox | - |
-| polygon   | 外接框 | 保留顶点 | 4 点旋转框 | - |
-| circle    | 外接框 | 多边形近似 | - | - |
-| point     | 极小框 | 忽略 | - | 关键点 |
-| line/linestrip | 外接框 | 转分割 | - | - |
+### s5 转换产物
 
-## 推理输出结构
+- 默认输出文件名：`yolo_<任务>_detector`（detect/segment/obb/pose 前缀），GUI 中可在「输出文件名称」处自定义。
+- 产物命名：`<output_name>.onnx`（ONNX）、`<output_name>.engine`（TensorRT）、`<output_name>.pt`（best 权重拷贝）。
 
-```
-{DATA_ROOT}/推理结果/
-├── 推理可视化/    # 叠加检测结果的图片
-├── 推理json/      # 结构化结果，便于后续处理
-└── 误差分析/      # 预测 vs 真值误差统计与图表
-    ├── error_stats.json      # Mean / Median / Std / Min / Max 统计
-    ├── error_analysis.png    # 误差分布直方图（bbox 中心/宽高/IoU + 点误差）
-    └── error_stats_bar.png   # Mean / Median / Std 汇总条形图
-```
+---
 
-## 常见问题
+## 5. 配置（src/yolo_tool/core/config.py）
 
-**Q1: 训练输出在哪里？**
-每次训练在 `{DATA_ROOT}/run_out/{时间戳}/train/weights/` 下生成 `best.pt` / `last.pt`，推理与转换优先取 info.yaml 记录的模型，否则自动取最新且训练完成的 `best.pt`（跳过中断训练）。
-
-**Q2: 能转 TensorRT engine 吗？**
-`s5_convert.py` 内置了 TRT 转换代码，但 TensorRT 仅支持 NVIDIA GPU。Mac/无独显环境请用 ONNX + onnxruntime；需要 engine 时把 `{DATA_ROOT}/权重/yolo_<task>_detector.onnx` 拷贝到 NVIDIA 机器上用 `trtexec --onnx=yolo_obb_detector.onnx --saveEngine=yolo_obb_detector.engine` 转换，产物再放回 `{DATA_ROOT}/权重`。
-
-**Q3: 推理默认输入是什么？**
-`INFER_INPUT = None` 时对验证集（`{dataset_dir}/val/images`）推理；传 `--input` 可指定任意目录或单张图片。
-
-**Q4: 报错 "argument 'workspace' is not supported for format='onnx'"？**
-旧代码在 onnx 导出时误传了 TRT 专有参数 `workspace`，已移除。若更新 ultralytics 后仍有类似校验错误，检查 `s5_convert.py` 的 `model.export()` 参数是否含 TRT 专有项。
-
-**Q5: 报错 "requirements not found, attempting AutoUpdate"？**
-`onnxruntime` / `onnxslim` 未安装。执行 `pip install onnxruntime "onnxruntime<2.0" onnxslim -i https://pypi.tuna.tsinghua.edu.cn/simple`。
+| 配置 | 说明 |
+| ---- | ---- |
+| `TASK_TYPE` | 任务类型：detect / segment / obb / pose |
+| `DEFAULT_SOURCE_DIR` | 原始数据目录（s1 输入） |
+| `DEFAULT_DATA_ROOT` | 数据根目录，其余目录自动派生 |
+| `MODELS_DIR` | 本地预训练权重目录（默认项目根 `models/`，可用环境变量 `YOLO_MODELS_DIR` 覆盖） |
+| `TRAIN_RATIO` / `VAL_RATIO` | 训练/验证比例（GUI 中联动，总和 = 1，验证集 ≥ 0.05） |
+| `EPOCHS` / `BATCH` / `IMGSZ` / `DEVICE` | 训练参数 |
+| `CONF` / `IOU` | 推理阈值 |
+| `EXPORT_TRT` / `TENSORRT_LIB` | TensorRT 导出开关与 trtexec 路径 |

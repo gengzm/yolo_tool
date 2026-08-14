@@ -13,8 +13,8 @@ from typing import Optional, Tuple, List
 import cv2
 import numpy as np
 
-import config
-from config import (
+from . import config
+from .config import (
     CLASS_NAMES, CLASS_TO_IDX, IMAGE_EXTENSIONS, LABELME_SUFFIX,
     TRAIN_RATIO, VAL_RATIO, CLASS_COLORS_BGR, POINT_COLORS_BGR,
 )

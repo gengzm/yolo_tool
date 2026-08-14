@@ -13,22 +13,31 @@ YOLO Tool 工作台 —— PySide6 图形界面
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QMessageBox, QTabWidget, QVBoxLayout, QWidget,
 )
 
-import config as C
-from utils import get_project_config, update_info_yaml
+from ..core import config as C
+from ..core.utils import get_project_config, update_info_yaml
 
 from . import tabs as T
 from .step_runner import StepRunner
 from .theme import apply_theme as apply_theme_qss
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# 项目根（存放 models/ 等），供子进程 cwd 使用
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+# step 脚本名 → 包内模块名（子进程以 python -m 方式运行，不再依赖 cwd）
+STEP_MODULES = {
+    "s0_collect_labels.py": "yolo_tool.steps.s0_collect_labels",
+    "s1_prepare_data.py": "yolo_tool.steps.s1_prepare_data",
+    "s2_visualize.py": "yolo_tool.steps.s2_visualize",
+    "s3_train.py": "yolo_tool.steps.s3_train",
+    "s4_inference.py": "yolo_tool.steps.s4_inference",
+    "s5_convert.py": "yolo_tool.steps.s5_convert",
+}
 
 
 class MainWindow(QMainWindow):
@@ -149,6 +158,9 @@ class MainWindow(QMainWindow):
         if self.runner is not None and self.runner.isRunning():
             self.log("[界面] 有任务正在运行，请等待其完成\n")
             return
+        # 脚本名 → python -m 模块方式运行，不依赖 cwd
+        if args and args[0] in STEP_MODULES:
+            args = ["-m", STEP_MODULES[args[0]]] + args[1:]
         tab.set_running(True)
         self.statusBar().showMessage("运行中: " + " ".join(args[:4]) + " ...")
         self.runner = StepRunner(args, cwd=str(PROJECT_ROOT))

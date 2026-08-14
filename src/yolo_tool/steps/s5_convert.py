@@ -6,14 +6,14 @@ Step 5: 模型转换（产物即最终部署权重）
 - ONNX → TensorRT 转换（当前占位，需安装 TensorRT 后启用）
 
 用法:
-    python s5_convert.py \\
+    yolo-tool s5 \\
         --model ./yolo_dataset/run_out/20240101_120000/train/weights/best.pt \\
         --output_dir ./权重 \\
         --imgsz 640 \\
         --half
 
 # 也可自动找最新模型:
-    python s5_convert.py \\
+    yolo-tool s5 \\
         --data ./yolo_dataset/data.yaml
 """
 import argparse
@@ -24,8 +24,8 @@ from pathlib import Path
 from ultralytics import YOLO
 import torch
 
-import config
-from utils import (
+from ..core import config
+from ..core.utils import (
     ensure_dir, log_info, log_warn, log_error,
     load_info_yaml, update_info_yaml, resolve_dataset_dir, get_project_config,
 )

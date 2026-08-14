@@ -11,14 +11,14 @@ Step 2: 标注可视化
   * 检测框显示 bbox 矩形
 
 用法:
-    python s2_visualize.py \\
+    yolo-tool s2 \\
         --source_dir ./yolo_dataset/train/images \\
         --label_dir ./yolo_dataset/train/labels \\
         --output_dir ./yolo_dataset/可视化标注 \\
         --task_type segment
 
 # 也可直接使用 step1 输出的数据集目录自动寻找：
-    python s2_visualize.py \\
+    yolo-tool s2 \\
         --dataset_dir ./yolo_dataset \\
         --split train \\
         --task_type segment
@@ -31,9 +31,9 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-import config
-from config import CLASS_NAMES, CLASS_COLORS_BGR, POINT_COLORS_BGR, IMAGE_EXTENSIONS
-from utils import (
+from ..core import config
+from ..core.config import CLASS_NAMES, CLASS_COLORS_BGR, POINT_COLORS_BGR, IMAGE_EXTENSIONS
+from ..core.utils import (
     ensure_dir, denormalize_points, log_info, log_warn, load_class_names_from_yaml,
     get_project_config,
 )
