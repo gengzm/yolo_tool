@@ -84,9 +84,10 @@ def merge_class_params(task_type: str, data_config: dict) -> dict:
 
 def train(data_path: str, task_type: str, model_path: str = None,
           epochs: int = None, batch: int = None, imgsz: int = None,
-          device: str = ""):
+          device: str = "", augment: dict = None):
     """
     执行 YOLO 训练
+    augment: 数据增强参数（fliplr/flipud/degrees/scale/translate/mosaic/mixup）
     """
     # 读取 data.yaml
     if not os.path.exists(data_path):
@@ -144,6 +145,14 @@ def train(data_path: str, task_type: str, model_path: str = None,
     if task_type in ("segment", "pose", "obb"):
         train_args["task"] = task_type
 
+    # 数据增强参数（界面「项目设置 → 数据增强」，未配置时用 ultralytics 默认值）
+    if augment:
+        _aug = {k: v for k, v in augment.items() if k in config.AUGMENT_DEFAULTS}
+        if _aug:
+            train_args.update(_aug)
+            log_info("Data augmentation: " + ", ".join(
+                f"{k}={v}" for k, v in _aug.items()))
+
     log_info("Starting training...")
     results = model.train(**train_args)
 
@@ -199,11 +208,18 @@ def main():
     epochs = args.epochs if args.epochs is not None else cfg["epochs"]
     batch = args.batch if args.batch is not None else cfg["batch"]
     imgsz = args.imgsz if args.imgsz is not None else cfg["imgsz"]
+    model_size = cfg.get("model_size") or getattr(config, "MODEL_SIZE", "n")
+    if model_size != getattr(config, "MODEL_SIZE", "n"):
+        # 项目设置页选择模型规格后，覆盖默认模型文件名规格
+        config.MODEL_SIZE = str(model_size)
 
-    train(data_path, task_type, args.model, epochs, batch, imgsz, args.device)
+    augment = {k: cfg.get(k, v) for k, v in config.AUGMENT_DEFAULTS.items()}
+    train(data_path, task_type, args.model, epochs, batch, imgsz, args.device,
+          augment=augment)
 
     # 回写训练参数到项目 info.yaml（界面切换到该项目时可回填表单）
-    update_info_yaml(dataset_dir, epochs=epochs, batch=batch, imgsz=imgsz)
+    update_info_yaml(dataset_dir, epochs=epochs, batch=batch, imgsz=imgsz,
+                     model_size=model_size)
 
 
 if __name__ == "__main__":

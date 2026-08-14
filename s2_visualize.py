@@ -38,6 +38,11 @@ from utils import (
     get_project_config,
 )
 
+# ---------- 可视化样式参数（可通过命令行覆盖，默认值见下） ----------
+CIRCLE_DIAMETER_FIRST = 6   # 第一个点直径 px
+CIRCLE_DIAMETER_OTHER = 4   # 其他点直径 px
+LINE_WIDTH = 2              # 线宽 px（bbox / 多边形 / 骨架 / 点连线）
+
 
 def draw_detection(img: np.ndarray, class_id: int, cx: float, cy: float,
                    w: float, h: float) -> np.ndarray:
@@ -49,7 +54,7 @@ def draw_detection(img: np.ndarray, class_id: int, cx: float, cy: float,
     y2 = int((cy + h / 2) * h_img)
 
     color = CLASS_COLORS_BGR[class_id % len(CLASS_COLORS_BGR)]
-    cv2.rectangle(img, (x1, y1), (x2, y2), color, thickness=2)
+    cv2.rectangle(img, (x1, y1), (x2, y2), color, thickness=LINE_WIDTH)
 
     # 类别标签
     label = CLASS_NAMES[class_id] if class_id < len(CLASS_NAMES) else f"cls{class_id}"
@@ -78,7 +83,7 @@ def draw_segmentation(img: np.ndarray, class_id: int,
 
     # 画边线
     cv2.polylines(img, [pts.reshape((-1, 1, 2))], isClosed=True,
-                  color=class_color, thickness=1)
+                  color=class_color, thickness=LINE_WIDTH)
 
     # 画点
     _draw_points_on_image(img, pts, class_id)
@@ -102,7 +107,7 @@ def draw_obb(img: np.ndarray, class_id: int,
     class_color = CLASS_COLORS_BGR[class_id % len(CLASS_COLORS_BGR)]
 
     cv2.polylines(img, [pts.reshape((-1, 1, 2))], isClosed=True,
-                  color=class_color, thickness=2)
+                  color=class_color, thickness=LINE_WIDTH)
 
     _draw_points_on_image(img, pts, class_id)
 
@@ -128,7 +133,7 @@ def draw_pose(img: np.ndarray, class_id: int, bbox: tuple,
     y1 = int((cy - h / 2) * h_img)
     x2 = int((cx + w / 2) * w_img)
     y2 = int((cy + h / 2) * h_img)
-    cv2.rectangle(img, (x1, y1), (x2, y2), class_color, thickness=2)
+    cv2.rectangle(img, (x1, y1), (x2, y2), class_color, thickness=LINE_WIDTH)
 
     # 画关键点及连线（骨架连接, 基于 COCO 17-keypoint 默认骨架）
     skeleton = [
@@ -151,12 +156,12 @@ def draw_pose(img: np.ndarray, class_id: int, bbox: tuple,
         pb = next(((px, py) for idx, px, py in valid_pts if idx == b), None)
         if pa and pb:
             color = POINT_COLORS_BGR[a % len(POINT_COLORS_BGR)]
-            cv2.line(img, pa, pb, color, thickness=1)
+            cv2.line(img, pa, pb, color, thickness=LINE_WIDTH)
 
     # 画关键点
     for idx, (i, px, py) in enumerate(valid_pts):
         is_first = (idx == 0)
-        radius = 5 if is_first else 3
+        radius = (CIRCLE_DIAMETER_FIRST if is_first else CIRCLE_DIAMETER_OTHER) // 2
         color = POINT_COLORS_BGR[i % len(POINT_COLORS_BGR)]
         cv2.circle(img, (px, py), radius, color, -1)
         cv2.circle(img, (px, py), radius, (255, 255, 255), 1)
@@ -171,20 +176,21 @@ def draw_pose(img: np.ndarray, class_id: int, bbox: tuple,
 
 def _draw_points_on_image(img: np.ndarray, pts: np.ndarray, class_id: int):
     """
-    通用点绘制：第一个点 5px，其余 3px，点颜色 20 种
+    通用点绘制：第一个点直径 CIRCLE_DIAMETER_FIRST，其余点
+    CIRCLE_DIAMETER_OTHER，点颜色 20 种，点间连线宽 LINE_WIDTH
     pts: 绝对像素坐标 (N, 2)
     """
     for i, pt in enumerate(pts):
         px, py = int(pt[0]), int(pt[1])
         is_first = (i == 0)
-        radius = 5 if is_first else 3
+        radius = (CIRCLE_DIAMETER_FIRST if is_first else CIRCLE_DIAMETER_OTHER) // 2
         point_color = POINT_COLORS_BGR[i % len(POINT_COLORS_BGR)]
         cv2.circle(img, (px, py), radius, point_color, -1)
         # 点之间连线
         if i > 0:
             prev_pt = (int(pts[i - 1][0]), int(pts[i - 1][1]))
             line_color = CLASS_COLORS_BGR[class_id % len(CLASS_COLORS_BGR)]
-            cv2.line(img, prev_pt, (px, py), line_color, thickness=1)
+            cv2.line(img, prev_pt, (px, py), line_color, thickness=LINE_WIDTH)
 
 
 def parse_yolo_label_line(line: str, task_type: str):
@@ -352,7 +358,19 @@ def main():
                         help="标注类型（默认取项目 info.yaml / config）")
     parser.add_argument("--yaml", type=str, default=None,
                         help="data.yaml 路径（从中加载类别名，--source_dir 模式下推荐使用）")
+    parser.add_argument("--circle_diameter_first", type=int, default=6,
+                        help="第一个点直径(px)，默认 6")
+    parser.add_argument("--circle_diameter_other", type=int, default=4,
+                        help="其他点直径(px)，默认 4")
+    parser.add_argument("--line_width", type=int, default=2,
+                        help="线宽(px，bbox/多边形/骨架/点连线)，默认 2")
     args = parser.parse_args()
+
+    # 应用可视化样式参数
+    global CIRCLE_DIAMETER_FIRST, CIRCLE_DIAMETER_OTHER, LINE_WIDTH
+    CIRCLE_DIAMETER_FIRST = max(1, args.circle_diameter_first)
+    CIRCLE_DIAMETER_OTHER = max(1, args.circle_diameter_other)
+    LINE_WIDTH = max(1, args.line_width)
 
     # 如果提供了 data.yaml，从中加载类别名
     if args.yaml:

@@ -277,23 +277,78 @@ def get_project_config(dataset_dir: str = None) -> dict:
     data_root = str(Path(config.DEFAULT_DATA_ROOT).resolve()) if getattr(config, "DEFAULT_DATA_ROOT", None) else str(Path(ds_dir).parent)
     defaults = {
         "data_root": data_root,
+        "theme": "light",       # 界面主题：light 浅色 / dark 深色
         "task_type": config.TASK_TYPE,
-        "source_dir": config.DEFAULT_SOURCE_DIR,
+        "source_dir_name": config.DEFAULT_DIR_NAMES["source"],
         "dataset_dir": ds_dir,
         "data_yaml": str(Path(ds_dir) / "data.yaml"),
-        "run_out_dir": config.DEFAULT_RUN_OUT_DIR or str(Path(data_root) / "run_out"),
-        "visualize_dir": config.DEFAULT_VISUALIZE_DIR or str(Path(data_root) / "可视化标注"),
+        "run_out_dir_name": config.DEFAULT_DIR_NAMES["run_out"],
+        "visualize_dir_name": config.DEFAULT_DIR_NAMES["visualize"],
         "infer_input": config.INFER_INPUT or str(Path(ds_dir) / "val" / "images"),
         "conf": config.CONF,
         "iou": config.IOU,
-        "weights_dir": config.DEFAULT_WEIGHTS_DIR or str(Path(data_root) / "权重"),
+        "weights_dir_name": config.DEFAULT_DIR_NAMES["weights"],
+        # 注：source_dir/run_out_dir/visualize_dir/weights_dir 完整路径
+        # 统一由 _unify_dir_cfg 按 data_root + 名称 派生，默认值不在此预置
         "train_ratio": config.TRAIN_RATIO,
         "val_ratio": config.VAL_RATIO,
         "epochs": config.EPOCHS,
         "batch": config.BATCH,
         "imgsz": config.IMGSZ,
+        "model_size": getattr(config, "MODEL_SIZE", "n"),
+        "export_trt": getattr(config, "EXPORT_TRT", False),
+        "trt_lib": getattr(config, "TENSORRT_LIB", ""),
+        # s2 可视化样式参数
+        "circle_diameter_first": 6,
+        "circle_diameter_other": 4,
+        "line_width": 2,
     }
+    # 数据增强默认值（训练时传给 ultralytics）
+    defaults.update(config.AUGMENT_DEFAULTS)
     cfg = dict(defaults)
     cfg.update(info)            # info.yaml 记录覆盖默认值
     cfg["dataset_dir"] = ds_dir  # 但 dataset_dir 始终以定位目录为准
+    _unify_dir_cfg(cfg, data_root, set(info.keys()))
     return cfg
+
+
+def _dir_path_for(cfg: dict, path_key: str, data_root: str, name: str) -> str:
+    """按目录类型用 data_root + 名称派生完整路径"""
+    if path_key == "source_dir":
+        return config.path_for_source(data_root, name)
+    if path_key == "weights_dir":
+        return config.path_for_weights(data_root, name)
+    if path_key == "run_out_dir":
+        return config.path_for_run_out(data_root, name)
+    return config.path_for_visualize(data_root, name)
+
+
+def _unify_dir_cfg(cfg: dict, data_root: str, recorded: set) -> None:
+    """目录统一管理：
+    - info.yaml 显式记录了「名称」 → 以 data_root + 名称 派生完整路径
+    - 只记录了完整路径 → 保留路径，名称回填为路径最后一段
+    - 两者都缺失 → 用默认名称派生"""
+    _DEFAULTS = {
+        "source_dir_name": "原始数据",
+        "weights_dir_name": "权重",
+        "run_out_dir_name": "run_out",
+        "visualize_dir_name": "可视化标注",
+    }
+    for name_key, path_key in (
+        ("source_dir_name", "source_dir"),
+        ("weights_dir_name", "weights_dir"),
+        ("run_out_dir_name", "run_out_dir"),
+        ("visualize_dir_name", "visualize_dir"),
+    ):
+        name = str(cfg.get(name_key) or "").strip().strip("/\\")
+        if "/" in name or "\\" in name:
+            name = name.replace("/", "_").replace("\\", "_")
+        if name_key in recorded and name:
+            cfg[path_key] = _dir_path_for(cfg, path_key, data_root, name)
+            cfg[name_key] = name
+        elif cfg.get(path_key):
+            cfg[name_key] = str(Path(str(cfg[path_key])).name)
+        else:
+            name = name or _DEFAULTS[name_key]
+            cfg[path_key] = _dir_path_for(cfg, path_key, data_root, name)
+            cfg[name_key] = name

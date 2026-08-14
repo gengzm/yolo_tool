@@ -2,6 +2,7 @@
 共享配置文件 —— 类别、颜色、路径等全局参数
 """
 import os
+from pathlib import Path
 
 # ======================== 类别配置 ========================
 # 类别名默认为空，由 step1 从 LabelMe JSON 中自动收集
@@ -17,6 +18,19 @@ CLASS_TO_IDX = {}
 EPOCHS = 100
 BATCH = 16
 IMGSZ = 640
+
+# ======================== 数据增强（训练时，ultralytics 参数） ========================
+# 概率类取值 0.0~1.0；degrees 为旋转角度范围（±degrees，度）
+# 界面「项目设置 → 训练与推理参数 → 数据增强」可覆盖，改动自动写入 info.yaml
+AUGMENT_DEFAULTS = {
+    "fliplr": 0.5,      # 左右翻转概率（fliplr）
+    "flipud": 0.0,      # 上下翻转概率（flipud）
+    "degrees": 0.0,     # 随机旋转角度范围 ±degrees（度）
+    "scale": 0.5,       # 随机缩放增益 ±scale（如 0.5 = 50%）
+    "translate": 0.1,   # 随机平移比例（宽/高 的 10%）
+    "mosaic": 1.0,      # Mosaic 拼接概率（1.0 = 每轮都用 4 图拼接）
+    "mixup": 0.0,       # MixUp 图像混合概率
+}
 
 
 # 不同类别的训练参数差异（可选覆盖）
@@ -66,6 +80,14 @@ INFER_INPUT = None
 # 置信度阈值 / IoU 阈值
 CONF = 0.25
 IOU = 0.45
+
+# ======================== TensorRT 转换（step5） ========================
+# trtexec 可执行文件绝对路径，或包含 trtexec 的目录
+# 留空 = 自动探测（系统 PATH 中的 trtexec / import tensorrt）
+# 注意：TensorRT 仅支持 NVIDIA GPU 环境
+TENSORRT_LIB = ""
+# 是否默认同时导出 TensorRT (.engine)
+EXPORT_TRT = False
 
 # ======================== 切分比例 ========================
 TRAIN_RATIO = 0.8
@@ -167,3 +189,49 @@ def set_class_names(names: list):
 def get_class_names() -> list:
     """获取当前类别名列表"""
     return CLASS_NAMES
+
+
+# ======================== 数据根目录派生 ========================
+# 所有子目录均从 data_root 派生，保证数据资产统一管理、互不混乱。
+# 界面强制统一：只允许修改 data_root 与「输出目录名称」（子目录名），
+# 完整路径 = {data_root}/{名称}，不允许自由选择完整路径。
+# 各子目录默认名称
+DEFAULT_DIR_NAMES = {
+    "source": "原始数据",        # 原始数据目录（LabelMe JSON），可改名称（上一级为 data_root）
+    "dataset": "训练集_{TASK}",  # YOLO 数据集目录（含 info.yaml），跟随任务类型，不可改
+    "weights": "权重",           # 最终权重目录（step5），可改名称
+    "run_out": "run_out",        # 训练输出目录（step3），可改名称
+    "visualize": "可视化标注",   # 可视化输出目录（step2），可改名称
+    "infer": "推理结果",          # 推理结果目录（step4）
+}
+
+
+def path_for_source(data_root: str, name: str = None) -> str:
+    """原始数据目录（LabelMe JSON）"""
+    return str(Path(data_root) / (name or DEFAULT_DIR_NAMES["source"]))
+
+
+def path_for_dataset(data_root: str, task_type: str = None) -> str:
+    """YOLO 数据集目录（含 info.yaml），名称跟随任务类型"""
+    t = (task_type or TASK_TYPE).lower()
+    return str(Path(data_root) / f"训练集_{t.upper()}")
+
+
+def path_for_weights(data_root: str, name: str = None) -> str:
+    """权重输出目录（step5）"""
+    return str(Path(data_root) / (name or DEFAULT_DIR_NAMES["weights"]))
+
+
+def path_for_run_out(data_root: str, name: str = None) -> str:
+    """训练输出目录（step3）"""
+    return str(Path(data_root) / (name or DEFAULT_DIR_NAMES["run_out"]))
+
+
+def path_for_visualize(data_root: str, name: str = None) -> str:
+    """可视化输出目录（step2）"""
+    return str(Path(data_root) / (name or DEFAULT_DIR_NAMES["visualize"]))
+
+
+def path_for_infer(data_root: str, name: str = None) -> str:
+    """推理结果目录（step4）"""
+    return str(Path(data_root) / (name or DEFAULT_DIR_NAMES["infer"]))

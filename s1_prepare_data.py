@@ -39,7 +39,7 @@ from utils import (
     collect_class_names_from_json, points_to_yolo_bbox,
     normalize_points, split_dataset, copy_image_and_label,
     ensure_dir, log_info, log_warn, log_error, get_image_size,
-    update_info_yaml, get_project_config,
+    update_info_yaml, get_project_config, load_info_yaml,
 )
 
 
@@ -315,6 +315,16 @@ def process_dataset(source_dir: str, dataset_dir: str, task_type: str = "detect"
         log_error("No class labels found in LabelMe JSON files!")
         log_error("Please ensure source_dir contains .json files with 'shapes' that have 'label' fields.")
         sys.exit(1)
+
+    # 应用界面保存的忽略标签（info.yaml -> labels.ignore），忽略类不参与训练、不写入 txt
+    info_before = load_info_yaml(dataset_dir)
+    ignore_set = set((info_before.get("labels") or {}).get("ignore", []) or [])
+    if ignore_set:
+        removed = [n for n in class_names if n in ignore_set]
+        class_names = [n for n in class_names if n not in ignore_set]
+        if removed:
+            log_warn(f"labels.ignore (from info.yaml): {removed}")
+
     config.set_class_names(class_names)
     log_info(f"Collected {len(class_names)} class(es) from LabelMe JSONs")
     for i, name in enumerate(config.CLASS_NAMES):
@@ -412,6 +422,7 @@ def process_dataset(source_dir: str, dataset_dir: str, task_type: str = "detect"
         labels={
             "count": len(config.CLASS_NAMES),
             "names": list(config.CLASS_NAMES),
+            "ignore": sorted(ignore_set),
         },
     )
 
