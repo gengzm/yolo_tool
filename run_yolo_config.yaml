@@ -1,0 +1,65 @@
+# ============================================================
+# YOLO 工具链 用户配置（可选）
+# ============================================================
+# 本文件放在项目根目录即可被自动加载（由 src/yolo_tool/core/config.py 读取），
+# 修改后无需重装、无需改任何代码，直接运行 GUI（yolo-tool）或
+# run_all.sh 即生效。全部注释掉则完全使用内置默认值。
+#
+# 配置优先级（从高到低）：
+#   命令行参数 > 数据集内 info.yaml 记录 > 本文件 > config.py 内置默认
+#
+# 其他可用的配置文件位置：
+#   - 环境变量指定（可放任意位置，如数据目录内的项目配置）:
+#       YOLO_CONFIG=/path/to/my.yaml bash run_all.sh
+#   - 个人全局配置（对所有项目生效）:
+#       ~/.config/yolo_tool/config.yaml
+#
+# 临时覆盖（不改本文件，适合一次性实验）：
+#   EPOCHS=50 BATCH=8 bash run_all.sh
+#   SOURCE_DIR=/tmp/x bash run_all.sh
+# ============================================================
+
+# ---- 任务类型 ----
+# detect / segment / obb / pose
+# TASK_TYPE: obb
+
+# ---- 数据根目录 ----
+# 所有数据资产统一放在该根目录下（原始数据 / 训练集 / 权重 / 输出等）。
+# 只改这一项时，DEFAULT_SOURCE_DIR / DEFAULT_DATASET_DIR 会自动按新根重算；
+# 若需要不同的子目录名，再单独放开下面两项。
+# DEFAULT_DATA_ROOT: /Users/Mac/Code/TemplateMatch
+# DEFAULT_SOURCE_DIR: /Users/Mac/Code/TemplateMatch/2000中筛选出的异常
+# DEFAULT_DATASET_DIR: /Users/Mac/Code/TemplateMatch/训练集_OBB
+
+# ---- 训练参数 ----
+# EPOCHS: 100
+# BATCH: 16
+# IMGSZ: 640
+# 模型规格: n / s / m / l / x
+# MODEL_SIZE: n
+
+# ---- 数据增强（概率 0.0~1.0，degrees 为旋转角度范围） ----
+# AUGMENT_DEFAULTS:
+#   fliplr: 0.5
+#   flipud: 0.0
+#   degrees: 0.0
+#   scale: 0.5
+#   translate: 0.1
+#   mosaic: 1.0
+#   mixup: 0.0
+
+# ---- 切分比例（训练 + 验证 = 1，验证集建议 >= 0.05，训练评估/best.pt 依赖） ----
+# TRAIN_RATIO: 0.8
+# VAL_RATIO: 0.2
+
+# ---- 推理参数 ----
+# CONF: 0.25
+# IOU: 0.45
+# 推理输入路径（None = 默认取数据集 val/images，即验证集）
+# INFER_INPUT: null
+
+# ---- TensorRT（仅 NVIDIA GPU 环境） ----
+# 是否默认同时导出 TensorRT (.engine)
+# EXPORT_TRT: false
+# trtexec 可执行文件绝对路径或包含 trtexec 的目录，留空自动探测
+# TENSORRT_LIB: ""

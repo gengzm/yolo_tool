@@ -1,35 +1,51 @@
 #!/bin/bash
-# 一键串联全部步骤
-# 用法: bash run_all.sh [task_type]   (detect / segment / obb / pose，默认 detect)
+# 一键串联全部步骤（与 GUI 共用同一套「项目配置」）
+# 用法: bash run_all.sh [task_type]   (detect / segment / obb / pose，默认读项目 info.yaml)
 # 前置: 已执行 pip install -e .（提供 yolo-tool 包与命令）
+#
+# 配置原则（一个数据项目 = 一份配置）：
+#   各 step 统一从「项目 info.yaml」读取训练/推理等参数（GUI 设置即写在这里），
+#   run_all.sh 只负责定位项目（SOURCE_DIR / DATASET_DIR）并串联步骤，
+#   不再与 GUI 抢配置。参数优先级：
+#     显式参数（环境变量 / 位置参数） > info.yaml > run_yolo_config.yaml > config.py 内置默认
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # ======================== 工具函数 ========================
-# 从配置模块读取任意配置值（传入 python 表达式）
+# 从配置模块读取「定位默认值」（自动加载项目根 run_yolo_config.yaml）
 cfg_value() {
     (cd "$SCRIPT_DIR" && python -c "from yolo_tool.core import config; print($1)")
 }
 
-# ======================== 参数 ========================
-# 任务类型默认取自配置模块，可用命令行参数临时覆盖
-TASK_TYPE="${1:-$(cfg_value 'config.TASK_TYPE')}"
-# 路径默认取自配置模块（改 config 即可），也可用环境变量覆盖
+# ======================== 定位参数 ========================
+# 只有定位参数（去哪个项目）默认取配置模块，
+# 其余训练/推理参数一律交给 step 从项目 info.yaml 读取（与 GUI 设置一致）。
 SOURCE_DIR="${SOURCE_DIR:-$(cfg_value 'config.DEFAULT_SOURCE_DIR')}"
 DATASET_DIR="${DATASET_DIR:-$(cfg_value 'config.DEFAULT_DATASET_DIR')}"
 
-# ---- 训练/推理参数（默认全部取自配置模块，环境变量可临时覆盖） ----
-EPOCHS="${EPOCHS:-$(cfg_value 'config.EPOCHS')}"
-BATCH="${BATCH:-$(cfg_value 'config.BATCH')}"
-IMGSZ="${IMGSZ:-$(cfg_value 'config.IMGSZ')}"
-INFER_INPUT="${INFER_INPUT:-$(cfg_value 'config.INFER_INPUT')}"   # None=默认验证集（交给 step4 自行解析）
-[ "$INFER_INPUT" = "None" ] && INFER_INPUT=""
-CONF="${CONF:-$(cfg_value 'config.CONF')}"
-IOU="${IOU:-$(cfg_value 'config.IOU')}"
-WEIGHTS_DIR="${WEIGHTS_DIR:-$(cfg_value 'config.DEFAULT_WEIGHTS_DIR')}"   # None=交给 step5 解析({DATA_ROOT}/权重，产物即最终部署权重)
-[ "$WEIGHTS_DIR" = "None" ] && WEIGHTS_DIR=""
-DEVICE="${DEVICE:-}"
+# ======================== 可选的显式覆盖 ========================
+# 未设置时对应参数从 info.yaml / run_yolo_config.yaml 读取；
+# 设置后优先级最高（适合一次性实验），用法示例：
+#   EPOCHS=50 BATCH=8 CONF=0.5 bash run_all.sh
+TASK_TYPE="${1:-${TASK_TYPE:-}}"   # 位置参数 或 环境变量
+ARGS_TASK=();  [ -n "$TASK_TYPE" ] && ARGS_TASK=(--task_type "$TASK_TYPE")
+ARGS_RATIO=()
+if [ -n "${TRAIN_RATIO:-}" ] && [ -n "${VAL_RATIO:-}" ]; then
+    ARGS_RATIO+=(--train_ratio "$TRAIN_RATIO" --val_ratio "$VAL_RATIO")
+fi
+ARGS_TRAIN=()
+[ -n "${EPOCHS:-}" ] && ARGS_TRAIN+=(--epochs "$EPOCHS")
+[ -n "${BATCH:-}" ]  && ARGS_TRAIN+=(--batch "$BATCH")
+[ -n "${IMGSZ:-}" ]  && ARGS_TRAIN+=(--imgsz "$IMGSZ")
+[ -n "${DEVICE:-}" ] && ARGS_TRAIN+=(--device "$DEVICE")
+ARGS_INFER=()
+[ -n "${CONF:-}" ]        && ARGS_INFER+=(--conf "$CONF")
+[ -n "${IOU:-}" ]         && ARGS_INFER+=(--iou "$IOU")
+[ -n "${INFER_INPUT:-}" ] && ARGS_INFER+=(--input "$INFER_INPUT")
+ARGS_CONVERT=()
+[ -n "${IMGSZ:-}" ]       && ARGS_CONVERT+=(--imgsz "$IMGSZ")
+[ -n "${WEIGHTS_DIR:-}" ] && ARGS_CONVERT+=(--output_dir "$WEIGHTS_DIR")
 
 DATA_YAML="${DATASET_DIR}/data.yaml"
 
@@ -48,45 +64,31 @@ python -m yolo_tool.steps.s0_collect_labels \
 python -m yolo_tool.steps.s1_prepare_data \
     --source_dir "$SOURCE_DIR" \
     --dataset_dir "$DATASET_DIR" \
-    --task_type "$TASK_TYPE"
+    "${ARGS_TASK[@]}" "${ARGS_RATIO[@]}"
 
 # ======================== Step 2: 可视化 ========================
 python -m yolo_tool.steps.s2_visualize \
     --dataset_dir "$DATASET_DIR" \
     --split all \
-    --task_type "$TASK_TYPE"
+    "${ARGS_TASK[@]}"
 
 # ======================== Step 3: 训练 ========================
-DEVICE_ARG=""
-[ -n "$DEVICE" ] && DEVICE_ARG="--device $DEVICE"
 python -m yolo_tool.steps.s3_train \
     --dataset_dir "$DATASET_DIR" \
     --data "$DATA_YAML" \
-    --task_type "$TASK_TYPE" \
-    --epochs "$EPOCHS" \
-    --batch "$BATCH" \
-    --imgsz "$IMGSZ" \
-    $DEVICE_ARG
+    "${ARGS_TASK[@]}" "${ARGS_TRAIN[@]}"
 
 # ======================== Step 4: 推理 ========================
-# 默认（INFER_INPUT 为空）对验证集推理；设置了 --input 则用自定义路径
-INFER_ARG=""
-[ -n "$INFER_INPUT" ] && INFER_ARG="--input $INFER_INPUT"
+# 默认对验证集推理；显式设置 INFER_INPUT 时使用自定义路径
 python -m yolo_tool.steps.s4_inference \
     --dataset_dir "$DATASET_DIR" \
     --data "$DATA_YAML" \
-    --task_type "$TASK_TYPE" \
-    --conf "$CONF" \
-    --iou "$IOU" \
-    $INFER_ARG
+    "${ARGS_TASK[@]}" "${ARGS_INFER[@]}"
 
 # ======================== Step 5: 转换（产物即最终部署权重） ========================
-CONVERT_ARG=""
-[ -n "$WEIGHTS_DIR" ] && CONVERT_ARG="--output_dir $WEIGHTS_DIR"
 python -m yolo_tool.steps.s5_convert \
     --dataset_dir "$DATASET_DIR" \
     --data "$DATA_YAML" \
-    --imgsz "$IMGSZ" \
-    $CONVERT_ARG
+    "${ARGS_CONVERT[@]}"
 
 echo "全部流程完成"

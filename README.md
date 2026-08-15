@@ -47,10 +47,10 @@ yolo-tool s3 --epochs 50 --batch 8
 ### 一键流程
 
 ```bash
-bash run_all.sh [task_type]     # detect / segment / obb / pose，默认取 config.py
+bash run_all.sh [task_type]     # detect / segment / obb / pose
 ```
 
-等价于依次执行 s0 → s5，所有参数默认取自 `config.py`，可用环境变量临时覆盖（见脚本内注释）。
+等价于依次执行 s0 → s5。训练/推理等参数与 GUI **共用同一份项目配置**（见第 5 节），脚本只负责定位项目并串联步骤；位置参数或环境变量可临时覆盖（见脚本内注释）。
 
 ---
 
@@ -85,7 +85,6 @@ yolo_tool/                    项目根
 ├── README.md
 │
 ├── models/                  本地预训练权重（yolo26n-*.pt 等，训练时优先使用，缺则在线下载）
-├── converted_models/        早期转换产物目录（现产物统一写入 {DATA_ROOT}/权重，可忽略）
 └── yolo26n-obb.pt           OBB 预训练权重样例（位于项目根目录）
 ```
 
@@ -109,15 +108,62 @@ yolo_tool/                    项目根
 
 ---
 
-## 5. 配置（src/yolo_tool/core/config.py）
+## 5. 配置
+
+### 5.1 配置结构（一个数据项目 = 一份配置）
+
+配置分「项目级」与「全局级」两层，所有入口（GUI / `run_all.sh` / 单步命令）统一走同一条优先级链：
+
+```
+显式参数（命令行 / 环境变量）  >  项目 info.yaml  >  run_yolo_config.yaml  >  config.py 内置默认
+```
+
+| 层级 | 位置 | 作用 |
+| ---- | ---- | ---- |
+| **项目级（随数据走）** | `{数据集目录}/info.yaml` | **单一真相源**。GUI 设置、各 step 的关键参数都读写这里；`run_all.sh` 与单步命令未显式指定的参数均从此读取。切换项目 = 换数据目录，配置自动跟随 |
+| **全局默认（随代码走）** | 项目根 `run_yolo_config.yaml` | 兜底。仅当项目 info.yaml 未记录对应项时生效（见 5.2） |
+| **内置兜底** | `src/yolo_tool/core/config.py` | 代码默认值，一般无需修改（见 5.3） |
+| **临时覆盖** | 命令行参数 / 环境变量 | 优先级最高，适合一次性实验：`EPOCHS=50 BATCH=8 bash run_all.sh` |
+
+使用示例：
+
+```bash
+# 1) GUI：设置页填好后自动写入项目 info.yaml，跑哪步用哪步
+yolo-tool
+# 2) 命令行/脚本：不用 GUI 也能跑，参数自动从 info.yaml 读取
+bash run_all.sh                      # 完全沿用项目配置
+EPOCHS=200 bash run_all.sh           # 仅临时改训练轮数
+yolo-tool s3 --epochs 200            # 单步临时覆盖
+# 3) 新项目：指定不同的数据目录即可，配置自动跟随
+SOURCE_DIR=/data/项目B/原始 DATASET_DIR=/data/项目B/数据集 bash run_all.sh
+```
+
+### 5.2 全局默认配置（run_yolo_config.yaml）
+
+项目根目录的 **`run_yolo_config.yaml`**（模板已随仓库提供，全部键默认注释），启动时自动加载并覆盖内置默认值。**无需改任何代码、无需重装**，GUI 与 `run_all.sh` 同时生效。
+
+配置文件查找顺序（只加载第一个找到的）：
+
+| 位置 | 说明 |
+| ---- | ---- |
+| `YOLO_CONFIG` 环境变量指定文件 | 可放任意路径（如数据目录内的项目配置），例：`YOLO_CONFIG=/data/proj/config.yaml bash run_all.sh` |
+| 项目根 `run_yolo_config.yaml` | 本仓库推荐方式 |
+| `~/.config/yolo_tool/config.yaml` | 个人全局配置，对所有项目生效 |
+
+### 5.3 内置默认值（src/yolo_tool/core/config.py）
+
+以下为未配置用户文件时的默认值，可直接在 `run_yolo_config.yaml` 中覆盖：
 
 | 配置 | 说明 |
 | ---- | ---- |
 | `TASK_TYPE` | 任务类型：detect / segment / obb / pose |
+| `DEFAULT_DATA_ROOT` | 数据根目录，其余目录自动派生（改它时源/数据集目录自动重算） |
 | `DEFAULT_SOURCE_DIR` | 原始数据目录（s1 输入） |
-| `DEFAULT_DATA_ROOT` | 数据根目录，其余目录自动派生 |
+| `DEFAULT_DATASET_DIR` | 数据集目录（含 data.yaml / info.yaml） |
 | `MODELS_DIR` | 本地预训练权重目录（默认项目根 `models/`，可用环境变量 `YOLO_MODELS_DIR` 覆盖） |
-| `TRAIN_RATIO` / `VAL_RATIO` | 训练/验证比例（GUI 中联动，总和 = 1，验证集 ≥ 0.05） |
-| `EPOCHS` / `BATCH` / `IMGSZ` / `DEVICE` | 训练参数 |
+| `MODEL_SIZE` | 模型规格：n / s / m / l / x |
+| `TRAIN_RATIO` / `VAL_RATIO` | 训练/验证比例（总和 = 1，验证集 ≥ 0.05） |
+| `AUGMENT_DEFAULTS` | 数据增强参数（fliplr / flipud / degrees / scale / translate / mosaic / mixup） |
+| `EPOCHS` / `BATCH` / `IMGSZ` | 训练参数 |
 | `CONF` / `IOU` | 推理阈值 |
 | `EXPORT_TRT` / `TENSORRT_LIB` | TensorRT 导出开关与 trtexec 路径 |

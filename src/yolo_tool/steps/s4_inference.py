@@ -47,7 +47,9 @@ import yaml
 from ultralytics import YOLO
 
 from ..core import config
-from ..core.config import CLASS_NAMES, CLASS_COLORS_BGR, POINT_COLORS_BGR, IMAGE_EXTENSIONS
+from ..core.config import (
+    CLASS_NAMES, IMAGE_EXTENSIONS, CLASS_COLORS_BGR, POINT_COLORS_BGR,
+)
 from ..core.utils import (
     ensure_dir, log_info, log_warn, log_error,
     get_project_config, load_labelme_json, normalize_points,

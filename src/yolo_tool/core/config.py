@@ -1,5 +1,10 @@
 """
-共享配置文件 —— 类别、颜色、路径等全局参数
+内置默认配置与程序常量
+
+本文件一般无需修改：
+- 日常参数（路径/训练/增强/推理/TensorRT 等）：编辑项目根 run_yolo_config.yaml，
+  启动时由 core.user_config 自动加载覆盖（模板见仓库根目录，所有键默认注释）。
+- 类别名等运行时数据由步骤脚本自动维护；可视化颜色表见本文件「常量」节。
 """
 import os
 from pathlib import Path
@@ -100,12 +105,9 @@ LABELME_SUFFIX = ".json"
 # 支持的图片格式
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
-# ======================== 项目信息文件 ========================
-# 记录标签/权重等运行状态，保存在数据目录内部（{dataset_dir}/info.yaml），供各 step 与外部界面读取
-INFO_YAML_NAME = "info.yaml"
-
-# ======================== 可视化颜色配置 ========================
-# 20 种类别颜色 (BGR 格式，OpenCV 使用)
+# ======================== 可视化颜色表（BGR，OpenCV 使用） ========================
+# 程序内部常量，一般无需修改
+# 20 种类别颜色 (BGR)
 CLASS_COLORS_BGR = [
     (0, 0, 255),     # 红
     (0, 255, 0),     # 绿
@@ -152,6 +154,10 @@ POINT_COLORS_BGR = [
     (80, 80, 80),    # 灰
     (255, 255, 255), # 纯白
 ]
+
+# ======================== 项目信息文件 ========================
+# 记录标签/权重等运行状态，保存在数据目录内部（{dataset_dir}/info.yaml），供各 step 与外部界面读取
+INFO_YAML_NAME = "info.yaml"
 
 # ======================== 预训练模型 ========================
 # 本地模型目录（放入 yolo26n-*.pt / yolo26s-*.pt 等文件，训练时自动优先使用）
@@ -238,3 +244,13 @@ def path_for_visualize(data_root: str, name: str = None) -> str:
 def path_for_infer(data_root: str, name: str = None) -> str:
     """推理结果目录（step4）"""
     return str(Path(data_root) / (name or DEFAULT_DIR_NAMES["infer"]))
+
+
+# ======================== 用户配置加载 ========================
+# 日常改参数无需编辑本文件：项目根 run_yolo_config.yaml（模板见仓库根目录），
+# 或 ~/.config/yolo_tool/config.yaml，启动时自动加载覆盖上面的默认值。
+# 查找顺序与优先级说明见 core/user_config.py。
+import sys as _sys
+from .user_config import load as _load_user_config  # noqa: E402
+
+_load_user_config(_sys.modules[__name__])

@@ -32,7 +32,9 @@ import cv2
 import numpy as np
 
 from ..core import config
-from ..core.config import CLASS_NAMES, CLASS_COLORS_BGR, POINT_COLORS_BGR, IMAGE_EXTENSIONS
+from ..core.config import (
+    CLASS_NAMES, IMAGE_EXTENSIONS, CLASS_COLORS_BGR, POINT_COLORS_BGR,
+)
 from ..core.utils import (
     ensure_dir, denormalize_points, log_info, log_warn, load_class_names_from_yaml,
     get_project_config,

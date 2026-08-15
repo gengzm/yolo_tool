@@ -124,7 +124,7 @@ class MainWindow(QMainWindow):
                 continue
             merged.update({k: v for k, v in fields.items()
                            if v not in (None, "")})
-        ds = merged.get("dataset_dir") or self.current_dataset_dir()
+        ds = merged.pop("dataset_dir", None) or self.current_dataset_dir()
         try:
             update_info_yaml(ds, **merged)
             self.log(f"[界面] 配置已保存 -> {ds}/info.yaml\n")
