@@ -10,19 +10,43 @@
 
 ## 1. 安装
 
+### 1.1 创建 conda 环境（推荐）
+
+为避免污染系统 Python 或其他项目环境，建议为本项目创建独立 conda 环境：
+
+```bash
+conda create -n yolo python=3.10 -y
+conda activate yolo
+```
+
+> 说明：
+> - 环境名 `yolo` 可自定义，后续所有命令需在该环境激活状态下执行。
+> - Python 建议 3.10~3.11（与 torch 2.2~2.4 官方支持完全对齐，最稳）；3.12 亦可，pip 会自动解析到 torch 2.3+。
+> - 未安装 conda 可先装 [Miniconda](https://docs.conda.io/en/latest/miniconda.html)（轻量）或 Anaconda。
+
+### 1.2 安装依赖
+
 ```bash
 pip install -e . -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
-> 以可编辑方式安装到当前 Python 环境，依赖由 `pyproject.toml` 统一管理，安装后获得 `yolo-tool` 命令。
+> 以可编辑方式安装到当前 conda 环境，依赖由 `pyproject.toml` 统一管理，安装后获得 `yolo-tool` 命令。
 > `run_all.sh` 内部仍会按 `requirements.txt` 检查/补齐依赖。
 >
 > 版本约束（见 `requirements.txt` 内注释）：
-> `numpy<2.0`、`opencv-python<4.11`、`onnxruntime<2.0`、`torch<2.5` —— 本机 torch 2.2.x 只支持 numpy 1.x，四条约束必须同时保留，升版需同步放宽。
+> `numpy<2.0`、`opencv-python<4.11`、`onnxruntime<2.0`、`torch<2.5` —— torch 2.2.x 只支持 numpy 1.x，四条约束必须同时保留，升版需同步放宽。
+
+### 1.3 验证安装
+
+```bash
+yolo-tool --help        # 或 python -m yolo_tool --help，能打印命令说明即安装成功
+```
 
 ---
 
 ## 2. 启动
+
+> 以下命令均需在已激活的 conda 环境中执行（`conda activate yolo`，见 1.1）。
 
 ### 图形界面
 
