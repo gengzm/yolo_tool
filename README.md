@@ -58,34 +58,33 @@ bash run_all.sh [task_type]     # detect / segment / obb / pose
 
 ```
 yolo_tool/                    项目根
-├── src/
-│   └── yolo_tool/            包（安装后为 yolo-tool 命令）
-│       ├── __init__.py       版本信息
-│       ├── __main__.py       python -m yolo_tool 入口
-│       ├── cli.py            yolo-tool 命令：GUI / s0~s5 子命令分发
-│       ├── app/              GUI 工作台
-│       │   ├── main.py       主窗口、步骤页装配、保存流程
-│       │   ├── tabs.py       各步骤页（设置 / s1~s5）
-│       │   ├── widgets.py    基础控件（表单、路径框、预览等）
-│       │   ├── step_runner.py 后台执行步骤（python -m 子进程）
-│       │   └── theme.py      全局 QSS 主题
-│       ├── config/           共享配置与公共函数
-│       │   ├── config.py     全局配置（目录、训练、转换参数）+ 用户配置加载
-│       │   └── utils.py      路径派生、配置读写、数据集拆分等
-│       └── steps/            s0~s5 步骤脚本（python -m 运行）
-│           ├── s0_collect_labels.py   收集源目录标签信息（类别/图片数）
-│           ├── s1_prepare_data.py     数据准备：拆分训练/验证集 + data.yaml
-│           ├── s2_visualize.py        可视化标注（结果图 + 可播放动画）
-│           ├── s3_train.py            训练（YOLO26，输出 best.pt / last.pt）
-│           ├── s4_inference.py        推理（默认验证集，可指定 --input）
-│           └── s5_convert.py          导出 ONNX / TensorRT(.engine)
+├── yolo_tool/                包（安装后为 yolo-tool 命令）
+│   ├── __init__.py           版本信息
+│   ├── __main__.py           python -m yolo_tool 入口
+│   ├── cli.py                yolo-tool 命令：GUI / s0~s5 子命令分发
+│   ├── app/                  GUI 工作台
+│   │   ├── main.py           主窗口、步骤页装配、保存流程
+│   │   ├── tabs.py           各步骤页（设置 / s1~s5）
+│   │   ├── widgets.py        基础控件（表单、路径框、预览等）
+│   │   ├── step_runner.py    后台执行步骤（python -m 子进程）
+│   │   └── theme.py          全局 QSS 主题
+│   ├── config/               共享配置与公共函数
+│   │   ├── config.py         全局配置（目录、训练、转换参数）+ 用户配置加载
+│   │   └── utils.py          路径派生、配置读写、数据集拆分等
+│   └── steps/                s0~s5 步骤脚本（python -m 运行）
+│       ├── s0_collect_labels.py   收集源目录标签信息（类别/图片数）
+│       ├── s1_prepare_data.py     数据准备：拆分训练/验证集 + data.yaml
+│       ├── s2_visualize.py        可视化标注（结果图 + 可播放动画）
+│       ├── s3_train.py            训练（YOLO26，输出 best.pt / last.pt）
+│       ├── s4_inference.py        推理（默认验证集，可指定 --input）
+│       └── s5_convert.py          导出 ONNX / TensorRT(.engine)
 ├── pyproject.toml           打包配置与依赖清单
 ├── run_all.sh               一键串联全部步骤
 ├── requirements.txt         run_all.sh 依赖安装清单（与 pyproject 一致）
+├── user_config.yaml         用户配置模板（全部键默认注释，见 5.2）
 ├── README.md
-│
-├── models/                  本地预训练权重（yolo26n-*.pt 等，训练时优先使用，缺则在线下载）
-└── yolo26n-obb.pt           OBB 预训练权重样例（位于项目根目录）
+└── models/                  本地预训练权重（yolo26n/s-{obb,seg,pose}.pt，
+                             训练时优先使用，缺则在线下载）
 ```
 
 ---
