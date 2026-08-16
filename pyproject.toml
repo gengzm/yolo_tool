@@ -27,9 +27,5 @@ dependencies = [
 [project.scripts]
 yolo-tool = "yolo_tool.cli:main"
 
-[tool.setuptools]
-package-dir = {"" = "src"}
-
 [tool.setuptools.packages.find]
-where = ["src"]
 include = ["yolo_tool*"]

@@ -1,7 +1,7 @@
 # ============================================================
 # YOLO 工具链 用户配置（可选）
 # ============================================================
-# 本文件放在项目根目录即可被自动加载（由 src/yolo_tool/core/config.py 读取），
+# 本文件放在项目根目录即可被自动加载（由 yolo_tool/config/config.py 读取），
 # 修改后无需重装、无需改任何代码，直接运行 GUI（yolo-tool）或
 # run_all.sh 即生效。全部注释掉则完全使用内置默认值。
 #
@@ -27,14 +27,14 @@
 # 所有数据资产统一放在该根目录下（原始数据 / 训练集 / 权重 / 输出等）。
 # 只改这一项时，DEFAULT_SOURCE_DIR / DEFAULT_DATASET_DIR 会自动按新根重算；
 # 若需要不同的子目录名，再单独放开下面两项。
-# DEFAULT_DATA_ROOT: /Users/Mac/Code/TemplateMatch
-# DEFAULT_SOURCE_DIR: /Users/Mac/Code/TemplateMatch/2000中筛选出的异常
-# DEFAULT_DATASET_DIR: /Users/Mac/Code/TemplateMatch/训练集_OBB
+DEFAULT_DATA_ROOT: /Users/Mac/Data/TemplateMatch
+DEFAULT_SOURCE_DIR: /Users/Mac/Data/TemplateMatch/2000中筛选出的异常
+DEFAULT_DATASET_DIR: /Users/Mac/Data/TemplateMatch/训练集_OBB
 
 # ---- 训练参数 ----
-# EPOCHS: 100
+EPOCHS: 100
 # BATCH: 16
-# IMGSZ: 640
+IMGSZ: 640
 # 模型规格: n / s / m / l / x
 # MODEL_SIZE: n
 

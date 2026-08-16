@@ -15,7 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # ======================== 工具函数 ========================
 # 从配置模块读取「定位默认值」（自动加载项目根 run_yolo_config.yaml）
 cfg_value() {
-    (cd "$SCRIPT_DIR" && python -c "from yolo_tool.core import config; print($1)")
+    (cd "$SCRIPT_DIR" && python -c "from yolo_tool.config import config; print($1)")
 }
 
 # ======================== 定位参数 ========================

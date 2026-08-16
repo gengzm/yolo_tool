@@ -69,8 +69,9 @@ yolo_tool/                    项目根
 │       │   ├── widgets.py    基础控件（表单、路径框、预览等）
 │       │   ├── step_runner.py 后台执行步骤（python -m 子进程）
 │       │   └── theme.py      全局 QSS 主题
-│       ├── core/             共享配置与公共函数
+│       ├── config/           共享配置与公共函数
 │       │   ├── config.py     全局配置（目录、训练、转换参数）
+│       │   ├── user_config.py 用户配置加载（run_yolo_config.yaml）
 │       │   └── utils.py      路径派生、配置读写、数据集拆分等
 │       └── steps/            s0~s5 步骤脚本（python -m 运行）
 │           ├── s0_collect_labels.py   收集源目录标签信息（类别/图片数）
@@ -122,7 +123,7 @@ yolo_tool/                    项目根
 | ---- | ---- | ---- |
 | **项目级（随数据走）** | `{数据集目录}/info.yaml` | **单一真相源**。GUI 设置、各 step 的关键参数都读写这里；`run_all.sh` 与单步命令未显式指定的参数均从此读取。切换项目 = 换数据目录，配置自动跟随 |
 | **全局默认（随代码走）** | 项目根 `run_yolo_config.yaml` | 兜底。仅当项目 info.yaml 未记录对应项时生效（见 5.2） |
-| **内置兜底** | `src/yolo_tool/core/config.py` | 代码默认值，一般无需修改（见 5.3） |
+| **内置兜底** | `yolo_tool/config/config.py` | 代码默认值，一般无需修改（见 5.3） |
 | **临时覆盖** | 命令行参数 / 环境变量 | 优先级最高，适合一次性实验：`EPOCHS=50 BATCH=8 bash run_all.sh` |
 
 使用示例：
@@ -150,7 +151,7 @@ SOURCE_DIR=/data/项目B/原始 DATASET_DIR=/data/项目B/数据集 bash run_all
 | 项目根 `run_yolo_config.yaml` | 本仓库推荐方式 |
 | `~/.config/yolo_tool/config.yaml` | 个人全局配置，对所有项目生效 |
 
-### 5.3 内置默认值（src/yolo_tool/core/config.py）
+### 5.3 内置默认值（yolo_tool/config/config.py）
 
 以下为未配置用户文件时的默认值，可直接在 `run_yolo_config.yaml` 中覆盖：
 
