@@ -70,8 +70,7 @@ yolo_tool/                    项目根
 │       │   ├── step_runner.py 后台执行步骤（python -m 子进程）
 │       │   └── theme.py      全局 QSS 主题
 │       ├── config/           共享配置与公共函数
-│       │   ├── config.py     全局配置（目录、训练、转换参数）
-│       │   ├── user_config.py 用户配置加载（run_yolo_config.yaml）
+│       │   ├── config.py     全局配置（目录、训练、转换参数）+ 用户配置加载
 │       │   └── utils.py      路径派生、配置读写、数据集拆分等
 │       └── steps/            s0~s5 步骤脚本（python -m 运行）
 │           ├── s0_collect_labels.py   收集源目录标签信息（类别/图片数）
@@ -116,13 +115,13 @@ yolo_tool/                    项目根
 配置分「项目级」与「全局级」两层，所有入口（GUI / `run_all.sh` / 单步命令）统一走同一条优先级链：
 
 ```
-显式参数（命令行 / 环境变量）  >  项目 info.yaml  >  run_yolo_config.yaml  >  config.py 内置默认
+显式参数（命令行 / 环境变量）  >  项目 info.yaml  >  user_config.yaml  >  config.py 内置默认
 ```
 
 | 层级 | 位置 | 作用 |
 | ---- | ---- | ---- |
 | **项目级（随数据走）** | `{数据集目录}/info.yaml` | **单一真相源**。GUI 设置、各 step 的关键参数都读写这里；`run_all.sh` 与单步命令未显式指定的参数均从此读取。切换项目 = 换数据目录，配置自动跟随 |
-| **全局默认（随代码走）** | 项目根 `run_yolo_config.yaml` | 兜底。仅当项目 info.yaml 未记录对应项时生效（见 5.2） |
+| **全局默认（随代码走）** | 项目根 `user_config.yaml` | 兜底。仅当项目 info.yaml 未记录对应项时生效（见 5.2） |
 | **内置兜底** | `yolo_tool/config/config.py` | 代码默认值，一般无需修改（见 5.3） |
 | **临时覆盖** | 命令行参数 / 环境变量 | 优先级最高，适合一次性实验：`EPOCHS=50 BATCH=8 bash run_all.sh` |
 
@@ -139,21 +138,21 @@ yolo-tool s3 --epochs 200            # 单步临时覆盖
 SOURCE_DIR=/data/项目B/原始 DATASET_DIR=/data/项目B/数据集 bash run_all.sh
 ```
 
-### 5.2 全局默认配置（run_yolo_config.yaml）
+### 5.2 全局默认配置（user_config.yaml）
 
-项目根目录的 **`run_yolo_config.yaml`**（模板已随仓库提供，全部键默认注释），启动时自动加载并覆盖内置默认值。**无需改任何代码、无需重装**，GUI 与 `run_all.sh` 同时生效。
+项目根目录的 **`user_config.yaml`**（模板已随仓库提供，全部键默认注释），启动时自动加载并覆盖内置默认值。**无需改任何代码、无需重装**，GUI 与 `run_all.sh` 同时生效。
 
 配置文件查找顺序（只加载第一个找到的）：
 
 | 位置 | 说明 |
 | ---- | ---- |
 | `YOLO_CONFIG` 环境变量指定文件 | 可放任意路径（如数据目录内的项目配置），例：`YOLO_CONFIG=/data/proj/config.yaml bash run_all.sh` |
-| 项目根 `run_yolo_config.yaml` | 本仓库推荐方式 |
+| 项目根 `user_config.yaml` | 本仓库推荐方式 |
 | `~/.config/yolo_tool/config.yaml` | 个人全局配置，对所有项目生效 |
 
 ### 5.3 内置默认值（yolo_tool/config/config.py）
 
-以下为未配置用户文件时的默认值，可直接在 `run_yolo_config.yaml` 中覆盖：
+以下为未配置用户文件时的默认值，可直接在 `user_config.yaml` 中覆盖：
 
 | 配置 | 说明 |
 | ---- | ---- |

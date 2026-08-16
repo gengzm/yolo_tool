@@ -7,13 +7,13 @@
 #   各 step 统一从「项目 info.yaml」读取训练/推理等参数（GUI 设置即写在这里），
 #   run_all.sh 只负责定位项目（SOURCE_DIR / DATASET_DIR）并串联步骤，
 #   不再与 GUI 抢配置。参数优先级：
-#     显式参数（环境变量 / 位置参数） > info.yaml > run_yolo_config.yaml > config.py 内置默认
+#     显式参数（环境变量 / 位置参数） > info.yaml > user_config.yaml > config.py 内置默认
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # ======================== 工具函数 ========================
-# 从配置模块读取「定位默认值」（自动加载项目根 run_yolo_config.yaml）
+# 从配置模块读取「定位默认值」（自动加载项目根 user_config.yaml）
 cfg_value() {
     (cd "$SCRIPT_DIR" && python -c "from yolo_tool.config import config; print($1)")
 }
@@ -25,7 +25,7 @@ SOURCE_DIR="${SOURCE_DIR:-$(cfg_value 'config.DEFAULT_SOURCE_DIR')}"
 DATASET_DIR="${DATASET_DIR:-$(cfg_value 'config.DEFAULT_DATASET_DIR')}"
 
 # ======================== 可选的显式覆盖 ========================
-# 未设置时对应参数从 info.yaml / run_yolo_config.yaml 读取；
+# 未设置时对应参数从 info.yaml / user_config.yaml 读取；
 # 设置后优先级最高（适合一次性实验），用法示例：
 #   EPOCHS=50 BATCH=8 CONF=0.5 bash run_all.sh
 TASK_TYPE="${1:-${TASK_TYPE:-}}"   # 位置参数 或 环境变量
