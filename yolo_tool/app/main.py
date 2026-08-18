@@ -11,12 +11,14 @@ YOLO Tool 工作台 —— PySide6 图形界面
 - 「执行」在后台线程运行对应脚本，日志统一输出到 s3 训练页日志区
 """
 import sys
+import time
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QMessageBox, QTabWidget, QVBoxLayout, QWidget,
+    QApplication, QMainWindow, QTabWidget, QVBoxLayout, QWidget,
+    QLabel, QGraphicsOpacityEffect,
 )
 
 from ..config import config as C
@@ -47,6 +49,11 @@ class MainWindow(QMainWindow):
         self.resize(1100, 780)
         self.runner = None
         self.cfg = {}
+        self._toast = None
+        self._toast_timer = None
+        self._status_timer = None
+        self._status_seq = 0
+        self._status_msg_until = 0.0
         self._build_ui()
         self.reload_config()
 
@@ -92,7 +99,7 @@ class MainWindow(QMainWindow):
         try:
             cfg = get_project_config(self.current_dataset_dir())
         except Exception as e:
-            QMessageBox.warning(self, "加载配置失败", str(e))
+            self.status_message(f"加载配置失败: {e}", warn=True)
             self.log(f"[界面] 加载配置失败: {e}\n")
             return
         self.cfg = cfg
@@ -109,6 +116,9 @@ class MainWindow(QMainWindow):
     def _update_title(self):
         ds = self.current_dataset_dir()
         self.setWindowTitle(f"YOLO Tool — {ds}")
+        # 提示消息显示期间不覆盖状态栏（避免防抖自动保存打断提示）
+        if time.monotonic() < self._status_msg_until:
+            return
         self.statusBar().showMessage(f"数据集目录: {ds}")
 
     def save_config(self, source_tab=None) -> str:
@@ -129,8 +139,8 @@ class MainWindow(QMainWindow):
             update_info_yaml(ds, **merged)
             self.log(f"[界面] 配置已保存 -> {ds}/info.yaml\n")
         except Exception as e:
-            if source_tab is None:       # 手动保存 → 弹窗
-                QMessageBox.warning(self, "保存配置失败", str(e))
+            if source_tab is None:       # 手动保存 → 状态栏提示
+                self.status_message(f"保存配置失败: {e}", warn=True)
             self.log(f"[界面] 保存配置失败: {e}\n")
             return str(ds)
         # 更新内存配置，供 Tab 读取默认输出目录等
@@ -182,11 +192,91 @@ class MainWindow(QMainWindow):
             self.log(f"[界面] 任务后处理失败: {e}\n")
 
     # ================= 杂项 =================
+    def status_message(self, text: str, timeout: int = 4000, warn: bool = False):
+        """提示：状态栏常驻显示 + 右下角浮动窗（toast），时长一致。
+
+        warn=True 时在消息前加「⚠ 」标记并延长到 6 秒，用于提醒类信息。
+        纯 Qt 自绘控件，macOS / Ubuntu 表现一致。
+        """
+        if warn:
+            text = "⚠ " + text
+            timeout = 6000
+        self._status_msg_until = time.monotonic() + timeout / 1000.0
+        self.statusBar().showMessage(text, timeout)
+        self.show_toast(text, timeout)
+        # 提示结束后恢复状态栏常驻消息（数据集目录）
+        self._status_seq += 1
+        seq = self._status_seq
+        if self._status_timer is not None:
+            self._status_timer.stop()
+        self._status_timer = QTimer(self)
+        self._status_timer.setSingleShot(True)
+        self._status_timer.timeout.connect(lambda: self._restore_status(seq))
+        self._status_timer.start(timeout)
+
+    def _restore_status(self, seq: int):
+        # 期间又有新提示则跳过，由新提示的恢复定时器负责
+        if seq != self._status_seq or not self.isVisible():
+            return
+        self.statusBar().showMessage(
+            f"数据集目录: {self.current_dataset_dir()}")
+
+    def show_toast(self, text: str, timeout: int = 4000):
+        """浮动提示（toast）：窗口右下角浮出，停留后自动淡出。"""
+        if self._toast is None:
+            self._toast = QLabel(self)
+            self._toast.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            self._toast.setStyleSheet(
+                "QLabel { background-color: rgba(48, 52, 60, 238); color: #ffffff;"
+                " border: 1px solid rgba(255, 255, 255, 60);"
+                " border-radius: 6px; padding: 8px 14px; font-size: 13px; }"
+            )
+            self._toast_opacity = QGraphicsOpacityEffect(self._toast)
+            self._toast.setGraphicsEffect(self._toast_opacity)
+            self._toast_anim = QPropertyAnimation(self._toast_opacity,
+                                                  b"opacity", self)
+            self._toast_anim.finished.connect(self._toast.hide)
+
+        self._toast.setText(text)
+        self._toast.adjustSize()
+        self._place_toast()
+        self._toast.show()
+        self._toast.raise_()
+
+        # 重置为不透明，并重启停留计时（先停留，末尾再淡出）
+        self._toast_anim.stop()
+        self._toast_opacity.setOpacity(1.0)
+        if self._toast_timer is not None:
+            self._toast_timer.stop()
+        self._toast_timer = QTimer(self)
+        self._toast_timer.setSingleShot(True)
+        self._toast_timer.timeout.connect(self._fade_toast_out)
+        self._toast_timer.start(max(timeout - 400, 300))
+
+    def _place_toast(self):
+        """把 toast 定位到窗口水平居中、垂直约 60% 高度处，随窗口缩放跟随。"""
+        m = 16
+        x = (self.width() - self._toast.width()) // 2
+        y = int(self.height() * 0.6) - self._toast.height() // 2
+        self._toast.move(max(x, m), max(y, m))
+
+    def _fade_toast_out(self):
+        self._toast_anim.stop()
+        self._toast_anim.setDuration(400)
+        self._toast_anim.setStartValue(self._toast_opacity.opacity())
+        self._toast_anim.setEndValue(0.0)
+        self._toast_anim.start()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._toast is not None and self._toast.isVisible():
+            self._place_toast()
+
     def open_dir(self, path: str):
         if path and Path(path).exists():
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
         else:
-            QMessageBox.information(self, "目录不存在", f"目录不存在：\n{path}")
+            self.status_message(f"目录不存在：{path}", warn=True)
 
     def log(self, text: str):
         """所有日志统一输出到 s3 训练页日志区（其他页面不显示日志）。"""

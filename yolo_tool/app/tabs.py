@@ -13,10 +13,10 @@ from typing import Optional
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDoubleSpinBox, QFrame, QGroupBox, QHeaderView,
-    QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton,
-    QScrollArea, QSpinBox, QSplitter, QTableWidget, QTableWidgetItem,
-    QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFrame, QGroupBox,
+    QHeaderView, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit,
+    QPushButton, QScrollArea, QSpinBox, QSplitter, QTableWidget,
+    QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from ..config import config as C
@@ -309,11 +309,13 @@ class ProjectTab(BaseStepTab):
         add_row(df, self._label("数据根目录",
                                 "所有数据的根目录（data_root），\n其余目录全部由它自动派生"),
                 dw)
-        # 原始数据：可改名称（上一级固定为数据根目录）；数据集：固定派生只读
+        # 原始数据：可改名称 + 限范围浏览（上一级固定为数据根目录）；数据集：固定派生只读
         self._add_dir_name_row(df, "原始数据目录",
                                "source_dir_name", "source_dir", "原始数据",
                                "LabelMe 原始标注数据所在目录（step1 读取），\n"
-                               "上一级固定为数据根目录，可修改子目录名称")
+                               "上一级固定为数据根目录：可直接改名称，\n"
+                               "或点「选择」在数据根目录下浏览子目录自动回填",
+                               browse=True)
         # 数据集目录：名称跟随任务类型自动生成、灰掉只读，仅展示不对齐不参与编辑
         dw = QWidget()
         dl = QHBoxLayout(dw)
@@ -518,8 +520,11 @@ class ProjectTab(BaseStepTab):
 
     # ---------- 目录联动（强制统一派生，不给自由选择） ----------
     def _add_dir_name_row(self, form, label, name_key, path_key, default_name,
-                          tooltip: str = ""):
-        """名称目录行：名称编辑框（可改）+ 完整路径只读预览（自动派生）"""
+                          tooltip: str = "", browse: bool = False):
+        """名称目录行：名称编辑框（可改）+ 完整路径只读预览（自动派生）
+
+        browse=True 时附加「选择」按钮：限浏览数据根目录下的子目录并回填名称。
+        """
         w = QWidget()
         lay = QHBoxLayout(w)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -537,8 +542,61 @@ class ProjectTab(BaseStepTab):
         pe.setMinimumWidth(CTRL_WIDTH)
         self.fields[path_key] = pe
         lay.addWidget(ne)
+        if browse:
+            btn = QPushButton("选择")
+            btn.setMaximumWidth(56)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setToolTip("在数据根目录下浏览选择子目录，自动回填名称")
+            btn.clicked.connect(lambda: self._browse_dir_name(name_key, path_key))
+            lay.addWidget(btn)
         lay.addWidget(pe, 1)
         add_row(form, self._label(label, tooltip), w)
+
+    def _browse_dir_name(self, name_key, path_key):
+        """限范围浏览：只能在「数据根目录」下选择直接子目录，回填名称
+
+        QFileDialog 本身无法限制导航范围，故选择后强校验：
+        所选目录必须是 data_root 的直接子目录（相对路径恰为一级），
+        超出范围（父目录之外 / 多级嵌套 / 根目录本身）一律拒绝并提示。
+        """
+        root = self.v("data_root").strip()
+        if not root:
+            self.main.status_message(
+                "请先设置「数据根目录」，再浏览选择其下的原始数据子目录",
+                warn=True)
+            return
+        root_p = Path(root).expanduser().resolve()
+        # 起始目录：当前已选路径在根目录内且存在 → 用它，否则从根目录开始
+        start = root_p
+        cur = self.v(path_key).strip()
+        if cur:
+            cp = Path(cur).expanduser().resolve()
+            if cp.is_relative_to(root_p) and cp.exists():
+                start = cp
+        path = QFileDialog.getExistingDirectory(
+            self, "选择数据根目录下的子目录", str(start))
+        if not path:
+            return
+        sel = Path(path).expanduser().resolve()
+        if sel == root_p:
+            self.main.status_message("不能选择数据根目录本身，请选择其下的子目录",
+                                     warn=True)
+            return
+        try:
+            rel = sel.relative_to(root_p)
+        except ValueError:
+            self.main.status_message(
+                f"所选目录不在数据根目录内：{sel}（根目录：{root_p}），"
+                "原始数据必须放在数据根目录下", warn=True)
+            return
+        if len(rel.parts) != 1:
+            self.main.status_message(
+                f"仅支持数据根目录下的直接子目录（一级），"
+                f"当前相对路径：{rel}，请选择更上一级", warn=True)
+            return
+        # 回填名称并同步派生路径（setText 触发 textChanged → 自动保存）
+        self.fields[name_key].setText(rel.name)
+        self._sync_all_dirs()
 
     def _on_root_edited(self):
         # 失焦：先同步派生目录，再与上次保存值比较，真变了才补存（点一下不改不保存）
@@ -745,10 +803,9 @@ class Step1Tab(BaseStepTab):
                 names = collect_class_names_from_json(src)
         if not names:
             if not silent:
-                QMessageBox.information(
-                    self, "无标签",
-                    "info.yaml 与源目录中均未找到标签，\n"
-                    "请在【项目设置】配置原始数据目录后点「重新加载标签」")
+                self.main.status_message(
+                    "未找到标签：请在【项目设置】配置原始数据目录后"
+                    "点「重新加载标签」", warn=True)
             return
         ignore = set(labels.get("ignore", []) or [])
         self._rows = []
@@ -824,7 +881,7 @@ class Step1Tab(BaseStepTab):
     def save_labels(self, silent: bool = True):
         if not self._rows:
             if not silent:
-                QMessageBox.information(self, "提示", "请先点击「重新加载标签」")
+                self.main.status_message("请先点击「重新加载标签」", warn=True)
             return
         active = [(sp.value(), name) for name, sp, cb in self._rows
                   if cb.currentText() != "跳过"]
