@@ -110,11 +110,12 @@ class PreviewPanel(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(1)
 
-        head = QHBoxLayout()
-        head.setSpacing(1)
-        head.addWidget(QLabel(title))
-        head.addStretch(1)
-        lay.addLayout(head)
+        if title:
+            head = QHBoxLayout()
+            head.setSpacing(1)
+            head.addWidget(QLabel(title))
+            head.addStretch(1)
+            lay.addLayout(head)
 
         self.img = QLabel("暂无图片")
         self.img.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -208,11 +209,12 @@ class MediaPlayer(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(1)
 
-        head = QHBoxLayout()
-        head.setSpacing(1)
-        head.addWidget(QLabel(title))
-        head.addStretch(1)
-        lay.addLayout(head)
+        if title:
+            head = QHBoxLayout()
+            head.setSpacing(1)
+            head.addWidget(QLabel(title))
+            head.addStretch(1)
+            lay.addLayout(head)
 
         self.stack = QStackedWidget()
         self.placeholder = QLabel("请选择 GIF 或视频文件播放")

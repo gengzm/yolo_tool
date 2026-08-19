@@ -1094,7 +1094,7 @@ class Step3Tab(BaseStepTab):
         ll.addLayout(self._actions)
         h_split.addWidget(left)
 
-        self.media = MediaPlayer()
+        self.media = MediaPlayer(title="")
         h_split.addWidget(self.media)
         h_split.setStretchFactor(0, 0)
         h_split.setStretchFactor(1, 1)
