@@ -351,43 +351,38 @@ class ProjectTab(BaseStepTab):
         dirs_box.setLayout(df)
         df.setContentsMargins(2, 2, 2, 2)
 
-        # 训练与推理参数：左侧原有训练/推理参数，右侧数据增强（左右分栏）
+        # 训练与推理参数：与「数据增强」平级左右并排（两个独立组框，避免组中组）
         params_box = QGroupBox("训练与推理参数")
         params_box.setToolTip("step3 训练与 step4 推理共用参数；\n"
                               "右侧「数据增强」在训练时生效")
-        ph = QHBoxLayout(params_box)
-        ph.setContentsMargins(2, 2, 2, 2)
-        ph.setSpacing(10)
+        pp = QVBoxLayout(params_box)
+        pp.setContentsMargins(2, 2, 2, 2)
+        pp.setSpacing(1)
         pf = make_form()
-        cb = QComboBox()
-        cb.addItems(TASK_CHOICES)
-        cb.setCurrentText(C.TASK_TYPE)
-        cb.setMaximumWidth(CTRL_WIDTH)
-        cb.currentTextChanged.connect(self._on_task_changed)
-        self.fields["task_type"] = cb
-        add_row(pf, self._label("任务类型",
-                                "目标检测 / 实例分割 / 旋转框检测（OBB），\n"
-                                "数据集目录名随之自动变化"),
-                cb)
+        # 任务类型：核心参数，标签用主题强调色加粗高亮；模型规格相邻其下
+        task_cb = QComboBox()
+        task_cb.addItems(TASK_CHOICES)
+        task_cb.setCurrentText(C.TASK_TYPE)
+        task_cb.setMaximumWidth(CTRL_WIDTH)
+        task_cb.currentTextChanged.connect(self._on_task_changed)
+        self.fields["task_type"] = task_cb
+        task_lab = self._label("★ 任务类型",
+                               "核心参数：目标检测 / 实例分割 / 旋转框检测（OBB），\n"
+                               "数据集目录名随之自动变化")
+        task_lab.setObjectName("taskLabel")
+        add_row(pf, task_lab, task_cb)
 
-        thm = QComboBox()
-        thm.addItems(["浅色", "深色"])
-        thm.setMaximumWidth(CTRL_WIDTH)
-        thm.currentIndexChanged.connect(self._on_theme_changed)
-        self.fields["theme"] = thm
-        add_row(pf, self._label("界面主题",
-                                "浅色 / 深色，全局即时切换\n（含编辑框、图片框等）"),
-                thm)
-
-        ms = QComboBox()
-        ms.addItems(["n", "s", "m", "l", "x"])
-        ms.setCurrentText(getattr(C, "MODEL_SIZE", "n"))
-        ms.setMaximumWidth(CTRL_WIDTH)
-        ms.currentIndexChanged.connect(self._auto_save)
-        self.fields["model_size"] = ms
+        ms_cb = QComboBox()
+        ms_cb.addItems(["n", "s", "m", "l", "x"])
+        ms_cb.setCurrentText(getattr(C, "MODEL_SIZE", "n"))
+        ms_cb.setMaximumWidth(CTRL_WIDTH)
+        ms_cb.setToolTip("YOLO 模型规格 n/s/m/l/x：\n"
+                         "n 最轻最快、x 最准最耗显存")
+        ms_cb.currentIndexChanged.connect(self._auto_save)
+        self.fields["model_size"] = ms_cb
         add_row(pf, self._label("模型规格",
                                 "YOLO 模型规格 n/s/m/l/x\n（越大越准、越耗显存）"),
-                ms)
+                ms_cb)
 
         tr = QDoubleSpinBox()
         tr.setRange(0.0, 0.95)   # 上限 0.95：保证验证集至少 0.05
@@ -449,7 +444,8 @@ class ProjectTab(BaseStepTab):
                                 "留空自动"),
                 dev)
         pf.setContentsMargins(2, 2, 2, 2)
-        ph.addLayout(pf, 3)
+        pp.addLayout(pf)
+        pp.addStretch(1)
 
         # 右侧：数据增强（训练时生效，写回 info.yaml 并传给 step3）
         aug_box = QGroupBox("数据增强")
@@ -470,17 +466,47 @@ class ProjectTab(BaseStepTab):
                 sp = QSpinBox()
                 sp.setRange(0, 180)
                 sp.setValue(int(C.AUGMENT_DEFAULTS[key]))
-                sp.setMaximumWidth(CTRL_WIDTH)
+                sp.setFixedWidth(CTRL_WIDTH)
             else:
                 sp = QDoubleSpinBox()
                 sp.setRange(0.0, 1.0); sp.setSingleStep(0.05); sp.setDecimals(2)
                 sp.setValue(float(C.AUGMENT_DEFAULTS[key]))
-                sp.setMaximumWidth(CTRL_WIDTH)
+                sp.setFixedWidth(CTRL_WIDTH)
             sp.valueChanged.connect(self._auto_save)
             self.fields[key] = sp
             add_row(af, self._label(label, tip), sp)
-        aug_box.setLayout(af)
-        ph.addWidget(aug_box, 2)
+        # 空一行后：界面主题（增强表格内最下面一行，与上方控件列对齐）
+        gap = QWidget()
+        gap.setFixedHeight(14)
+        af.addRow("", gap)
+        thm = QComboBox()
+        thm.addItems(["浅色", "深色"])
+        thm.setFixedWidth(CTRL_WIDTH)
+        thm.currentIndexChanged.connect(self._on_theme_changed)
+        self.fields["theme"] = thm
+        add_row(af, self._label("界面主题",
+                                "浅色 / 深色，全局即时切换\n（含编辑框、图片框等）"),
+                thm)
+        # 数据增强整表水平居中（两侧 stretch 包裹，label 右对齐紧贴控件）
+        center_wrap = QWidget()
+        cw = QHBoxLayout(center_wrap)
+        cw.setContentsMargins(0, 0, 0, 0)
+        cw.addStretch(1)
+        cw.addLayout(af)
+        cw.addStretch(1)
+        av = QVBoxLayout(aug_box)
+        av.setContentsMargins(2, 2, 2, 2)
+        av.setSpacing(1)
+        av.addWidget(center_wrap)
+        av.addStretch(1)
+
+        # 「训练与推理参数」与「数据增强」：平级左右并排
+        params_row = QWidget()
+        pr = QHBoxLayout(params_row)
+        pr.setContentsMargins(0, 0, 0, 0)
+        pr.setSpacing(10)
+        pr.addWidget(params_box, 1)
+        pr.addWidget(aug_box, 1)
 
         # 转换与导出：路径编辑框贴近标签；CUDA 提示在浏览按钮右侧
         trt_box = QGroupBox("转换与导出")
@@ -508,7 +534,7 @@ class ProjectTab(BaseStepTab):
 
         # 三个组框跨列占满整行（不占用标签列），紧贴表单左边缘
         self.form.addRow(dirs_box)
-        self.form.addRow(params_box)
+        self.form.addRow(params_row)
         self.form.addRow(trt_box)
 
     def _build_actions(self):
@@ -1079,7 +1105,7 @@ class Step3Tab(BaseStepTab):
         v_split.addWidget(top)
 
         v_split.addWidget(self.build_log_panel())
-        v_split.setSizes([605, 495])   # 上 55% : 下 45%
+        v_split.setSizes([440, 660])   # 上 40% : 日志 60%
         self.root.addWidget(v_split, 1)
 
     def _build_actions(self):
@@ -1157,22 +1183,25 @@ class Step3Tab(BaseStepTab):
         self.fields["batch"].setText(str(cfg.get("batch", "")))
         self.fields["imgsz"].setText(str(cfg.get("imgsz", "")))
         self.fields["device"].setText(str(cfg.get("device", "")))
-        # 预训练模型：显示配置值；为空则显示按任务计算出的默认模型
+        # 预训练模型：只显示文件名称；完整路径存 _model_full 供训练脚本使用
         model = str(cfg.get("model") or "")
         if not model:
             try:
                 model = resolve_model_path(C.task_model_name(cfg.get("task_type")))
             except Exception:
                 model = ""
-        self.fields["model"].setText(model)
+        self._model_full = model or ""
+        self.fields["model"].setText(
+            Path(self._model_full).name if self._model_full else "")
 
     def save_cfg(self) -> dict:
         return {}
 
     def build_args(self) -> list:
         args = ["s3_train.py", "--dataset_dir", self.ds()]
-        if self.v("model"):
-            args += ["--model", self.v("model")]
+        m = getattr(self, "_model_full", None) or self.v("model")
+        if m:
+            args += ["--model", m]
         return args
 
     def on_done(self, ok: bool):
@@ -1193,7 +1222,7 @@ class Step4Tab(BaseStepTab):
         self.add_path("input", "推理输入", "", mode="dir",
                       tip="默认显示数据根目录下的验证集图片目录；"
                           "可改为任意图片目录或单张图片路径")
-        self.add_dspin("conf", "置信度阈值", C.CONF, 0.0, 1.0)
+        self.add_dspin("conf", "置信阈值", C.CONF, 0.0, 1.0)
         self.add_dspin("iou", "IoU 阈值", C.IOU, 0.0, 1.0)
         open_btn = QPushButton("打开推理结果目录")
         open_btn.setCursor(Qt.CursorShape.PointingHandCursor)

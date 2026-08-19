@@ -21,6 +21,7 @@ LIGHT = {
     "table_alt": "#f4f6f8",
     "scroll": "#c0c5cc",
     "scroll_hover": "#a5abb4",
+    "accent": "#2f6fed",
 }
 
 DARK = {
@@ -37,6 +38,7 @@ DARK = {
     "table_alt": "#32373c",
     "scroll": "#565c63",
     "scroll_hover": "#6b7279",
+    "accent": "#6ea1ff",
 }
 
 _THEMES = {"light": LIGHT, "dark": DARK}
@@ -79,6 +81,8 @@ QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; color: 
 
 QLabel { color: ${text}; background: transparent; }
 QLabel#hint { color: ${text_sub}; }
+/* 重要参数标签（如任务类型）：加粗 + 主题强调色 */
+QLabel#taskLabel { color: ${accent}; font-weight: bold; }
 
 /* 编辑框 / 下拉框 / 输入控件：统一稍高 + 圆角 */
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit, QTextEdit {
