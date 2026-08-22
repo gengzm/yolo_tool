@@ -78,6 +78,7 @@ class MainWindow(QMainWindow):
                           (self.t4, "s4 推理 + 误差分析"),
                           (self.t5, "s5 转换导出")):
             self.tabs.addTab(tab, name)
+        self.tabs.currentChanged.connect(self._on_tab_changed)
 
         root.addWidget(self.tabs, 1)
         self.setCentralWidget(central)
@@ -94,6 +95,16 @@ class MainWindow(QMainWindow):
 
     def all_tabs(self):
         return (self.project_tab, self.t1, self.t2, self.t3, self.t4, self.t5)
+
+    def _on_tab_changed(self, index: int):
+        """切页钩子：页面实现 on_show() 时在切入时调用（如 s4 刷新训练权重列表）"""
+        tab = self.tabs.widget(index)
+        on_show = getattr(tab, "on_show", None)
+        if callable(on_show):
+            try:
+                on_show()
+            except Exception as e:
+                self.log(f"[界面] {type(tab).__name__} 页面刷新失败: {e}\n")
 
     def reload_config(self):
         try:

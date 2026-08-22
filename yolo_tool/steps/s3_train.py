@@ -4,7 +4,7 @@ Step 3: YOLO 训练
 - 使用 ultralytics YOLO 进行训练
 - 支持不同任务类型（detect / segment / obb / pose）
 - 不同类别可配置不同的训练参数
-- 训练结果输出到数据根目录 {DATA_ROOT}/run_out
+- 训练结果输出到数据根目录 {DATA_ROOT}/run_out/{任务类型}/{时间戳}
 
 用法:
     yolo-tool s3 \\
@@ -45,16 +45,18 @@ def get_task_model(task_type: str) -> str:
     return resolve_model_path(task_model_name(task_type))
 
 
-def get_run_out_dir(data_path: str) -> str:
+def get_run_out_dir(data_path: str, task_type: str = "") -> str:
     """
     确定 run_out 输出目录：
-    数据根目录 {DATA_ROOT}/run_out / 时间戳子目录
+    数据根目录 {DATA_ROOT}/run_out/{任务类型}/{时间戳}
+    同一任务的多次训练集中在同一任务目录下，便于查看与归档。
     """
     data_dir = Path(data_path).parent.resolve()
     cfg = get_project_config(str(data_dir))
     base = cfg.get("run_out_dir") or str(Path(data_dir) / "run_out")
+    task = (task_type or str(cfg.get("task_type") or "")).strip().strip("/\\")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = Path(base) / timestamp
+    run_dir = Path(base) / (task or "_") / timestamp
     ensure_dir(str(run_dir))
     return str(run_dir)
 
@@ -124,8 +126,8 @@ def train(data_path: str, task_type: str, model_path: str = None,
     # 加载模型
     model = YOLO(model_path)
 
-    # 确定输出目录
-    run_dir = get_run_out_dir(data_path)
+    # 确定输出目录（run_out/{任务类型}/{时间戳}）
+    run_dir = get_run_out_dir(data_path, task_type)
     log_info(f"Run output dir: {run_dir}")
 
     # 构建训练参数（学习率等超参不显式传入，用 ultralytics 默认值）

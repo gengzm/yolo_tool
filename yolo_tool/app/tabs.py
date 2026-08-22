@@ -7,9 +7,12 @@
 - s3 训练：上方左参数、右上动画播放器，下方 40% 为全局运行日志
 - s5 转换只读展示，imgsz / TensorRT 等配置在项目设置页统一管理
 """
+import re
 import shutil
 from pathlib import Path
 from typing import Optional
+
+import yaml
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
@@ -56,7 +59,7 @@ class BaseStepTab(QWidget):
     task_label = "step"
     use_form = True    # False: 页面完全自定义
     hsplit = False     # True: 左表单 + 右图片预览
-    left_frac = 0.25   # hsplit 时左栏默认宽度占比（s2/s4 用 20%）
+    left_frac = 0.25   # hsplit 时左栏默认宽度占比（s2/s3/s4 用 30%）
 
     def __init__(self, main):
         super().__init__()
@@ -344,7 +347,8 @@ class ProjectTab(BaseStepTab):
         self._add_dir_name_row(df, "训练输出目录",
                                "run_out_dir_name", "run_out_dir", "run_out",
                                "step3 训练输出（run_out）目录，\n"
-                               "每次训练自动生成时间戳子目录")
+                               "按 任务类型/时间戳 组织："
+                               "run_out/{任务类型}/{时间戳}")
         self._add_dir_name_row(df, "可视化输出目录",
                                "visualize_dir_name", "visualize_dir", "可视化标注",
                                "step2 标注可视化图片的输出目录")
@@ -1043,10 +1047,21 @@ class Step2Tab(BaseStepTab):
 
 
 class Step3Tab(BaseStepTab):
-    """s3 训练：上方左参数 + 右上动画播放器，下方 45% 为全局运行日志"""
+    """s3 训练：上方 训练参数 | 数据增强 | 视频 三栏，下方为全局运行日志"""
 
     task_label = "s3 训练"
-    left_frac = 0.3   # 上部分左右 3:7，参照 s2
+    left_frac = 0.3   # 上部分左参数占比，参照 s2
+
+    # 数据增强参数（与「项目设置」页一致，此处只读展示）
+    AUG_SPECS = (
+        ("fliplr", "左右翻转", "随机水平翻转概率（fliplr）"),
+        ("flipud", "上下翻转", "随机垂直翻转概率（flipud）"),
+        ("degrees", "旋转角度", "随机旋转角度范围 ±degrees（度）"),
+        ("scale", "缩放", "随机缩放增益 ±scale（如 0.5 = ±50%）"),
+        ("translate", "平移", "随机平移比例（宽/高的 10% 默认）"),
+        ("mosaic", "马赛克拼接", "Mosaic 概率（1.0 = 每轮都用 4 图拼接）"),
+        ("mixup", "混合", "MixUp 图像混合概率"),
+    )
 
     def build_ui(self):
         self.add_readonly("task_type", "任务类型", "")
@@ -1064,6 +1079,15 @@ class Step3Tab(BaseStepTab):
         self.add_readonly("batch", "batch size", "")
         self.add_readonly("imgsz", "输入尺寸", "")
         self.add_readonly("device", "训练设备", "")
+        # 数据增强：只读展示（在「项目设置」页统一修改），独立中间栏
+        self.aug_form = make_form()
+        for key, label, tip in self.AUG_SPECS:
+            aedit = QLineEdit("")
+            aedit.setReadOnly(True)
+            aedit.setMinimumWidth(CTRL_WIDTH)
+            aedit.setMaximumWidth(CTRL_WIDTH)
+            self.fields[key] = aedit
+            add_row(self.aug_form, self._label(label, tip), aedit)
 
     # ---------- 布局：上（左参数 + 右动画） / 下 40% 日志 ----------
     def _layout_body(self):
@@ -1075,6 +1099,8 @@ class Step3Tab(BaseStepTab):
         tl = QVBoxLayout(top)
         tl.setContentsMargins(0, 0, 0, 0)
         tl.setSpacing(1)
+        # 左侧两栏（训练参数 | 数据增强）用 QHBoxLayout 固定比例、无分割线、
+        # 不可拖拽；左侧整体与视频之间用 QSplitter，可拖拽调整宽度
         h_split = QSplitter(Qt.Orientation.Horizontal)
         h_split.setHandleWidth(1)
         h_split.setChildrenCollapsible(False)
@@ -1083,13 +1109,25 @@ class Step3Tab(BaseStepTab):
         ll = QVBoxLayout(left)
         ll.setContentsMargins(0, 0, 0, 0)     # 参照 s2：参数区贴边
         ll.setSpacing(1)
+        inner = QWidget()
+        il = QHBoxLayout(inner)
+        il.setContentsMargins(0, 0, 0, 0)
+        il.setSpacing(0)   # 两列之间无分割线、宽度固定比例
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         fp = QWidget()
         fp.setLayout(self.form)
         scroll.setWidget(fp)
-        ll.addWidget(scroll, 1)
+        il.addWidget(scroll, 28)   # 训练参数
+        ascroll = QScrollArea()
+        ascroll.setWidgetResizable(True)
+        ascroll.setFrameShape(QFrame.Shape.NoFrame)
+        afp = QWidget()
+        afp.setLayout(self.aug_form)
+        ascroll.setWidget(afp)
+        il.addWidget(ascroll, 25)  # 数据增强
+        ll.addWidget(inner, 1)
         self._build_actions()
         ll.addLayout(self._actions)
         h_split.addWidget(left)
@@ -1099,8 +1137,8 @@ class Step3Tab(BaseStepTab):
         h_split.setStretchFactor(0, 0)
         h_split.setStretchFactor(1, 1)
         total = 1100
-        lw = int(total * max(0.1, min(0.5, self.left_frac)))
-        h_split.setSizes([lw, total - lw])
+        # 左（训练参数+数据增强 53%）: 视频 47%
+        h_split.setSizes([int(total * 0.53), int(total * 0.47)])
         tl.addWidget(h_split, 1)
         v_split.addWidget(top)
 
@@ -1146,13 +1184,11 @@ class Step3Tab(BaseStepTab):
         base = str(self.main.cfg.get("run_out_dir", ""))
         if not base or not Path(base).is_dir():
             return None
-        runs = sorted((p for p in Path(base).iterdir() if p.is_dir()),
-                      key=lambda p: p.stat().st_mtime, reverse=True)
-        for r in runs:
-            td = r / "train"
-            if (td / "results.csv").exists():
-                return td
-        return None
+        # run_out 结构：run_out/{任务类型}/{时间戳}/train，
+        # 递归查找最新的 results.csv 对应最近一次训练
+        cands = sorted(Path(base).rglob("train/results.csv"),
+                       key=lambda p: p.stat().st_mtime, reverse=True)
+        return cands[0].parent if cands else None
 
     def _append_recent_train(self):
         td = self._latest_train_dir()
@@ -1183,6 +1219,10 @@ class Step3Tab(BaseStepTab):
         self.fields["batch"].setText(str(cfg.get("batch", "")))
         self.fields["imgsz"].setText(str(cfg.get("imgsz", "")))
         self.fields["device"].setText(str(cfg.get("device", "")))
+        # 数据增强：只读展示，取值来自项目配置（缺省用默认值）
+        for key in C.AUGMENT_DEFAULTS:
+            self.fields[key].setText(
+                str(cfg.get(key, C.AUGMENT_DEFAULTS[key])))
         # 预训练模型：只显示文件名称；完整路径存 _model_full 供训练脚本使用
         model = str(cfg.get("model") or "")
         if not model:
@@ -1210,18 +1250,29 @@ class Step3Tab(BaseStepTab):
 
 
 class Step4Tab(BaseStepTab):
-    """s4 推理 + 误差分析：左参数（20%）+ 右图表预览"""
+    """s4 推理 + 误差分析：左参数（30%）+ 右图表预览"""
 
     task_label = "s4 推理 + 误差分析"
     hsplit = True
-    left_frac = 0.2
+    left_frac = 0.3
 
     def build_ui(self):
         self.add_readonly("task_type", "任务类型", "")
-        self.add_readonly("model", "使用模型", "")
+        # 训练权重：仅当前任务类型的训练权重可选，默认选中最新
+        lab = self._label("训练权重",
+                          "选择本次推理使用的训练权重（当前任务类型 run_out 下的 best.pt）；"
+                          "默认选中最新")
+        cb = QComboBox()
+        cb.setMinimumWidth(CTRL_WIDTH)
+        cb.setMaximumWidth(CTRL_WIDTH)
+        cb.currentIndexChanged.connect(self._auto_save)
+        self.fields["model"] = cb
+        add_row(self.form, lab, cb)
+        # 推理输入：只读展示默认路径，可通过「浏览」按钮选择其他目录/图片
         self.add_path("input", "推理输入", "", mode="dir",
                       tip="默认显示数据根目录下的验证集图片目录；"
-                          "可改为任意图片目录或单张图片路径")
+                          "不可手输，可点「浏览」选择其他目录或单张图片")
+        self.fields["input"].setReadOnly(True)
         self.add_dspin("conf", "置信阈值", C.CONF, 0.0, 1.0)
         self.add_dspin("iou", "IoU 阈值", C.IOU, 0.0, 1.0)
         open_btn = QPushButton("打开推理结果目录")
@@ -1232,9 +1283,7 @@ class Step4Tab(BaseStepTab):
 
     def load_cfg(self, cfg: dict):
         self.fields["task_type"].setText(str(cfg.get("task_type", "")))
-        weights = cfg.get("weights") or {}
-        model = (weights.get("best") or weights.get("last") or "")
-        self.fields["model"].setText(str(model))
+        self.refresh_weights(cfg)
         # 推理输入：配置值优先；为空则显示默认验证集目录（数据根目录下）
         inp = str(cfg.get("infer_input") or "")
         if not inp:
@@ -1246,14 +1295,98 @@ class Step4Tab(BaseStepTab):
         self.fields["conf"].setValue(float(cfg.get("conf", 0.25)))
         self.fields["iou"].setValue(float(cfg.get("iou", 0.45)))
 
+    # ---------- 训练权重下拉框 ----------
+    def refresh_weights(self, cfg=None, prefer=None):
+        """重建「训练权重」下拉框：当前任务类型 run_out 下的 best.pt 按最新在前。
+        prefer: 优先选中的路径；None=保持当前选择，无记录则默认最新。"""
+        cfg = cfg or self.main.cfg or {}
+        cb = self.fields["model"]
+        task = str(cfg.get("task_type", "") or "").strip()
+        cur = prefer
+        if cur is None:
+            cur = cb.currentData() if cb.count() else None
+        items = self._scan_weight_items(cfg, task)
+        cb.blockSignals(True)
+        cb.clear()
+        for display, path, t in items:
+            cb.addItem(display, path)
+            cb.setItemData(cb.count() - 1,
+                           f"{path}\n任务类型: {t or '未知'}",
+                           Qt.ItemDataRole.ToolTipRole)
+        if items:
+            idx = 0
+            for i in range(cb.count()):
+                if cb.itemData(i) == cur:
+                    idx = i
+                    break
+            cb.setCurrentIndex(idx)
+            cb.setEnabled(True)
+        else:
+            cb.addItem("（暂无训练权重，请先执行 s3 训练）")
+            cb.setCurrentIndex(0)
+            cb.setEnabled(False)
+        cb.blockSignals(False)
+
+    def _scan_weight_items(self, cfg: dict, task: str = "") -> list:
+        """扫描 run_out/{任务类型}/{时间戳}/train/weights/best.pt，
+        仅当前任务类型（唯一入口）；task 为空时扫描 run_out 下全部。
+        返回 [(显示名, 完整路径, task)] 按 mtime 最新在前"""
+        base = Path(str(cfg.get("run_out_dir") or ""))
+        if not base.is_dir():
+            data_root = str(cfg.get("data_root") or "")
+            if data_root:
+                base = Path(data_root) / "run_out"
+        scan_root = (base / task) if task else base
+        out = []
+        if scan_root.is_dir():
+            for w in sorted(scan_root.rglob("weights/best.pt"),
+                            key=lambda p: p.stat().st_mtime, reverse=True):
+                train_dir = w.parent.parent   # .../{ts}/train/weights/best.pt
+                t = self._task_of_train(train_dir)
+                display = self._fmt_ts(train_dir.parent.name)
+                if t:
+                    display += f" · {t}"
+                out.append((display, str(w), t))
+        return out
+
+    @staticmethod
+    def _task_of_train(train_dir: Path) -> str:
+        p = train_dir / "args.yaml"
+        if not p.exists():
+            return ""
+        try:
+            d = yaml.safe_load(p.read_text(encoding="utf-8",
+                                           errors="replace")) or {}
+            return str(d.get("task", "") or "").strip()
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _fmt_ts(name: str) -> str:
+        m = re.fullmatch(r"(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})", name)
+        if m:
+            return f"{m[1]}-{m[2]}-{m[3]} {m[4]}:{m[5]}"
+        return name
+
+    def on_show(self):
+        """切换到本页时刷新权重列表（s3 训练后可能出现新权重）"""
+        self.refresh_weights()
+
     def save_cfg(self) -> dict:
+        cb = self.fields["model"]
+        path = cb.currentData() if cb.count() else None
         return {"infer_input": self.v("input") or None,
-                "conf": self.v("conf"), "iou": self.v("iou")}
+                "conf": self.v("conf"), "iou": self.v("iou"),
+                "infer_model": path or None}
 
     def build_args(self) -> list:
         args = ["s4_inference.py", "--dataset_dir", self.ds(),
                 "--conf", str(self.v("conf")),
                 "--iou", str(self.v("iou"))]
+        cb = self.fields["model"]
+        path = cb.currentData() if cb.count() else None
+        if path:
+            args += ["--model", path]
         if self.v("input"):
             args += ["--input", self.v("input")]
         return args
